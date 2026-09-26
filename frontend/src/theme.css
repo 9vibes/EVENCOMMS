@@ -1,0 +1,56 @@
+/* Match the local-font setup and console palette used by KUNAS/SteamLab. */
+@font-face {
+  font-family: "Open Sans";
+  src: local("Open Sans"), local("OpenSans-Regular");
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Open Sans";
+  src: local("Open Sans SemiBold"), local("OpenSans-SemiBold");
+  font-weight: 600;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Open Sans";
+  src: local("Open Sans Bold"), local("OpenSans-Bold");
+  font-weight: 700 900;
+  font-display: swap;
+}
+
+:root {
+  color-scheme: dark;
+  --comms-font: "Open Sans", "Segoe UI", Arial, sans-serif;
+  --comms-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --comms-background: #101210;
+  --comms-surface: #181b18;
+  --comms-header: #141714;
+  --comms-inset: #11170f;
+  --comms-deep: #0d110c;
+  --comms-button: #262c23;
+  --comms-hover: #333c2e;
+  --comms-selected: #27251c;
+  --comms-text: #e8e9e3;
+  --comms-muted: #979e92;
+  --comms-line: #30362e;
+  --comms-control-line: #3e4736;
+  --comms-control-hover: #667357;
+  --comms-accent: #eeb653;
+  --comms-accent-ink: #201b11;
+  --comms-accent-hover: #f7ca78;
+  --comms-success: #bed8b2;
+  --comms-success-background: #1d281b;
+  --comms-success-line: #465c3d;
+  --comms-error: #f0b19e;
+  --comms-error-background: #30231e;
+  --comms-error-line: #64453a;
+  font-family: var(--comms-font);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  background: var(--comms-background);
+  color: var(--comms-text);
+  accent-color: var(--comms-accent);
+  scrollbar-color: var(--comms-control-hover) var(--comms-inset);
+}
+
+::selection { background: var(--comms-accent); color: var(--comms-accent-ink); }

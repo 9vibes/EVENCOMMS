@@ -1,0 +1,57 @@
+# STAGING ONLY: build/load evencomms:0.1.0 on the Umbrel host first.
+# Umbrel supplies app_proxy's image and its platform compose configuration.
+services:
+  app_proxy:
+    environment:
+      APP_HOST: kunas-evencomms_server_1
+      APP_PORT: 8000
+      # EVENCOMMS authenticates operators and paired phone clients itself.
+      PROXY_AUTH_ADD: "false"
+
+  data_init:
+    image: evencomms:0.1.0
+    pull_policy: never
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - mkdir -p /data/models && chown -R 10001:10001 /data && chmod 700 /data
+    network_mode: none
+    read_only: true
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      disable: true
+    volumes:
+      - ${APP_DATA_DIR:?Umbrel must provide APP_DATA_DIR}/data:/data
+
+  server:
+    image: evencomms:0.1.0
+    pull_policy: never
+    init: true
+    restart: unless-stopped
+    depends_on:
+      data_init:
+        condition: service_completed_successfully
+    environment:
+      ADMIN_PASSWORD: ${APP_PASSWORD:?Umbrel must provide a nonempty APP_PASSWORD}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
+      DATABASE_PATH: /data/evencomms.sqlite3
+      MODEL_CACHE: /data/models
+      STT_ENABLED: ${STT_ENABLED:-true}
+      STT_MODEL: ${STT_MODEL:-base.en}
+      STT_TIMEOUT: ${STT_TIMEOUT:-90}
+      OLLAMA_URL: ${OLLAMA_URL:-}
+      OLLAMA_MODEL: ${OLLAMA_MODEL-llama3.2:3b}
+      OLLAMA_TIMEOUT: ${OLLAMA_TIMEOUT:-30}
+      MAX_SESSIONS: ${MAX_SESSIONS:-100}
+      MAX_MESSAGES_PER_SESSION: ${MAX_MESSAGES_PER_SESSION:-1000}
+    volumes:
+      - ${APP_DATA_DIR:?Umbrel must provide APP_DATA_DIR}/data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true

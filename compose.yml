@@ -1,0 +1,38 @@
+name: evencomms
+services:
+  server:
+    build:
+      context: .
+    image: evencomms:0.1.0
+    pull_policy: never
+    init: true
+    restart: unless-stopped
+    environment:
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set a nonempty ADMIN_PASSWORD in .env}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
+      DATABASE_PATH: /data/evencomms.sqlite3
+      MODEL_CACHE: /data/models
+      STT_ENABLED: ${STT_ENABLED:-true}
+      STT_MODEL: ${STT_MODEL:-base.en}
+      STT_TIMEOUT: ${STT_TIMEOUT:-90}
+      OLLAMA_URL: ${OLLAMA_URL-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL-llama3.2:3b}
+      OLLAMA_TIMEOUT: ${OLLAMA_TIMEOUT:-30}
+      MAX_SESSIONS: ${MAX_SESSIONS:-100}
+      MAX_MESSAGES_PER_SESSION: ${MAX_MESSAGES_PER_SESSION:-1000}
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:28097:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  data:

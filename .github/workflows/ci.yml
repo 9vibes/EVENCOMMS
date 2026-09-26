@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install backend test dependencies
+        run: pip install '.[test]'
+      - name: Backend tests
+        run: pytest
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Frontend tests
+        working-directory: frontend
+        run: npm test
+      - name: Frontend build
+        working-directory: frontend
+        run: npm run build
+      - name: Install browser test runtime
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: Browser end-to-end tests
+        working-directory: frontend
+        run: npm run test:e2e
+      - name: Validate Even package (example origin only)
+        working-directory: frontend
+        env:
+          EVENCOMMS_ORIGIN: https://stone.example.test
+        run: npm run pack
+      - name: Validate standalone Compose
+        env:
+          ADMIN_PASSWORD: ci-only-not-a-deployment-password
+        run: docker compose config --quiet
+      - name: Build local image (no publication)
+        run: docker build -t evencomms:0.1.0 .
+      - name: Container smoke test (no inference)
+        env:
+          ADMIN_PASSWORD: ci-only-not-a-deployment-password
+          STT_ENABLED: "false"
+          OLLAMA_URL: ""
+        run: |
+          docker compose up -d --no-build --wait --wait-timeout 90
+          curl --fail http://127.0.0.1:28097/health
+          curl --fail http://127.0.0.1:28097/ > /dev/null
+          curl --fail http://127.0.0.1:28097/glasses.html > /dev/null
+          docker compose exec -T server python -c 'import os; import faster_whisper; from pathlib import Path; assert os.getuid() == 10001; assert Path("/data/models").is_dir(); assert os.access("/data/models", os.W_OK); assert Path("/data/evencomms.sqlite3").is_file()'
+      - name: Container logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+        env:
+          ADMIN_PASSWORD: ci-only-not-a-deployment-password
+      - name: Clean up CI data
+        if: always()
+        run: docker compose down -v
+        env:
+          ADMIN_PASSWORD: ci-only-not-a-deployment-password
