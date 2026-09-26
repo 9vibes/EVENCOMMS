@@ -25,6 +25,7 @@ RUN apt-get update \
     && install -d -m 0700 -o 10001 -g 10001 /data /data/models
 COPY pyproject.toml ./
 COPY backend/ ./backend/
+COPY infra/ ./infra/
 RUN pip install '.[stt]'
 COPY --from=frontend /build/frontend/dist/ ./frontend/dist/
 USER 10001:10001

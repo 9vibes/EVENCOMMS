@@ -1005,7 +1005,7 @@ function Footer() {
     <footer className="op-footer">
       <span>KUNAS / EVENCOMMS</span>
       <span>BUILT FOR PRESENCE. NOT DISTRACTION.</span>
-      <span>LOCAL COMMS / v0.1</span>
+      <span>LOCAL COMMS / v0.2</span>
     </footer>
   );
 }

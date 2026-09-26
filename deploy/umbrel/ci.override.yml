@@ -1,0 +1,8 @@
+# CI supplies a definition for Umbrel's proxy but does not start that service.
+# Tests enter web directly; the actual Umbrel host/proxy remains an acceptance check.
+services:
+  app_proxy:
+    image: nginx:1.28-alpine@sha256:a8b39bd9cf0f83869a2162827a0caf6137ddf759d50a171451b335cecc87d236
+  web:
+    ports:
+      - "127.0.0.1:28197:8080"

@@ -6,18 +6,19 @@ reply on the glasses. English speech transcription runs locally; an existing
 local Ollama server can suggest a reply, but **the operator must review and send
 it**. There is no cloud inference integration and no automatic AI reply.
 
-Version `0.1.0` is an early release. The installable Umbrel package is maintained
+Version `0.2.0` adds live RTMP monitoring. The installable Umbrel package is maintained
 in [KNS-Umbrel](https://github.com/9vibes/KNS-Umbrel/tree/master/kunas-evencomms).
 The files in `deploy/umbrel` remain local-development templates, not the store's
 digest-pinned release package. See [the protocol](docs/protocol.md) for API
 contracts. Physical G2/phone behavior still needs hardware acceptance testing.
 
-**STREAM is unreleased.** Current source adds an operator tab for one RTMP live
-feed, with authenticated HLS playback and no recording or transcoding. Released
-`0.1.0` lacks STREAM: using it requires rebuilding from current source and
-redeploying all services, not just replacing the frontend. The local build tag
-stays `evencomms:0.1.0`; this is not a new GHCR release. The published KNS-Umbrel
-package remains unchanged until a future tagged release. See the
+**OPERATOR / STREAM** switches between conversations and a full-width live RTMP
+feed with authenticated HLS playback, without recording or transcoding. Updating
+from `0.1.0` requires redeploying the full stack, including nginx and MediaMTX,
+not just replacing the frontend. Keep the existing app installation and back up
+its data first; do not uninstall. The app ID, web port, password, conversations,
+wearer pairings and model cache are preserved. Managed proxy/media configuration
+is installed automatically by the image's init service. See the
 [stream deployment and OBS guide](docs/streaming.md).
 
 ## First-Version Interaction
@@ -89,7 +90,7 @@ curl --fail http://127.0.0.1:28097/health
    simulation**. This does not promise browser microphone capture or validate
    real glasses audio.
 
-The locally built tag is `evencomms:0.1.0`; no registry pull is needed or claimed.
+The locally built tag is `evencomms:0.2.0`; no registry pull is needed or claimed.
 The API binds port `8000` inside the private network and is **never published**.
 The only HTTP entry is `web` nginx on container port `8080`, published as host
 `28097`, bound to loopback by default. For isolated LAN testing set

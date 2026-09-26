@@ -1,14 +1,15 @@
-# Live Stream (Unreleased)
+# Live Stream (0.2.0)
 
 One RTMP publisher feeds MediaMTX at `live/stream`; operator browsers use an
 authenticated same-origin HLS proxy. No recording, transcoding or analysis.
 The original conversation API and wearer client remain unchanged.
 
-Released `0.1.0` does **not** contain STREAM. Rebuild current backend/frontend
-source and redeploy **all services**, including the new public `web` proxy and
-MediaMTX. The local tag remains `evencomms:0.1.0`; it does not identify a new
-published release. The installed KNS-Umbrel store package is unchanged and must
-wait for a future tagged release. Do not run this topology against the old image.
+Version `0.1.0` does **not** contain STREAM. Update to `0.2.0` and redeploy **all
+services**, including the new public `web` proxy and MediaMTX. Back up the app,
+then update it in place rather than uninstalling: existing conversations,
+pairings, application password and model cache remain in place. The store's init
+service installs the bundled nginx/MediaMTX configuration automatically. Do not
+run the new topology against the old image.
 
 ## API
 
@@ -119,13 +120,14 @@ Do not substitute browser URLs or publish these ports to fix connectivity.
 
 ### Umbrel Staging
 
-Use [the staging instructions](../deploy/umbrel/README.md), not the live store
-package. Build/load the current source as local `evencomms:0.1.0`, and synchronize
-`nginx.conf.template` and `mediamtx.yml.template` to
-`${APP_DATA_DIR}/config/nginx.conf` and `${APP_DATA_DIR}/config/mediamtx.yml`
-**before every deployment that changes templates**. These are literal config
-files, not secrets; keep nginx's `$` variables intact. Nginx bypasses its default
-entrypoint and will not render templates for you.
+Use [the staging instructions](../deploy/umbrel/README.md) for local development,
+or the digest-pinned KNS-Umbrel package for installation. Local builds use
+`evencomms:0.2.0`. The init service copies the image's bundled `infra/` files into
+`${APP_DATA_DIR}/config` at startup. Both consumers mount the whole directory
+read-only and wait for initialization through the backend health dependency.
+No manual copying, platform template expansion or nginx entrypoint rendering is
+needed. Literal nginx `$` variables are preserved. These two files are managed:
+changes to them are replaced on the next initialization; other files are untouched.
 
 Umbrel supplies `APP_PASSWORD` and `APP_DATA_DIR`. `PUBLIC_HOST` defaults to
 `DEVICE_DOMAIN_NAME`, falling back to `umbrel.local`; set a reachable LAN/VPN

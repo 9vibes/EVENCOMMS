@@ -1,4 +1,4 @@
-# STAGING ONLY: rebuild/load evencomms:0.1.0 from current source, not the release.
+# STAGING ONLY: build/load evencomms:0.2.0 from source.
 # Umbrel supplies app_proxy's image and its platform compose configuration.
 x-logging: &logging
   driver: json-file
@@ -16,10 +16,10 @@ services:
     logging: *logging
 
   data_init:
-    image: evencomms:0.1.0
+    image: evencomms:0.2.0
     pull_policy: never
     user: "0:0"
-    command: [python, -m, backend.init_data]
+    command: [python, -m, backend.init_data, --config-dir, /config]
     network_mode: none
     read_only: true
     restart: "no"
@@ -29,10 +29,11 @@ services:
       disable: true
     volumes:
       - ${APP_DATA_DIR:?Umbrel must provide APP_DATA_DIR}/data:/data
+      - ${APP_DATA_DIR:?Umbrel must provide APP_DATA_DIR}/config:/config
     logging: *logging
 
   server:
-    image: evencomms:0.1.0
+    image: evencomms:0.2.0
     pull_policy: never
     init: true
     restart: unless-stopped
@@ -73,13 +74,13 @@ services:
   mediamtx:
     image: bluenviron/mediamtx:1.12.3@sha256:3634a1eed1288b93e8d22ed74694eae96d483fcf676cac5d0c91830ad1b86b3d
     entrypoint: [/mediamtx]
-    command: [/mediamtx.yml]
+    command: [/config/mediamtx.yml]
     restart: unless-stopped
     depends_on:
       server:
         condition: service_healthy
     volumes:
-      - ${APP_DATA_DIR:?Umbrel must provide APP_DATA_DIR}/config/mediamtx.yml:/mediamtx.yml:ro
+      - ${APP_DATA_DIR:?Umbrel must provide APP_DATA_DIR}/config:/config:ro
     ports:
       - "${RTMP_BIND:-0.0.0.0}:${RTMP_PORT:-21936}:1935/tcp"
     networks: [private]
@@ -92,13 +93,13 @@ services:
     image: nginx:1.28-alpine@sha256:a8b39bd9cf0f83869a2162827a0caf6137ddf759d50a171451b335cecc87d236
     user: "101:101"
     entrypoint: [nginx]
-    command: [-g, "daemon off;"]
+    command: [-c, /config/nginx.conf, -g, "daemon off;"]
     restart: unless-stopped
     depends_on:
       server:
         condition: service_healthy
     volumes:
-      - ${APP_DATA_DIR:?Umbrel must provide APP_DATA_DIR}/config/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ${APP_DATA_DIR:?Umbrel must provide APP_DATA_DIR}/config:/config:ro
     networks: [default, private]
     read_only: true
     tmpfs:

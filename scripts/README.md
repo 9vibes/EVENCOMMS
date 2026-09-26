@@ -5,9 +5,17 @@ only the Python standard library on the host; WebSocket checks run with the
 image's installed dependencies. It never pulls or rebuilds the supplied image.
 
 ```sh
-python scripts/container_smoke.py --image evencomms:0.1.0
-python scripts/container_smoke.py --image evencomms:0.1.0 --speech-pcm /tmp/speech.pcm
+python scripts/container_smoke.py --image evencomms:0.2.0
+python scripts/container_smoke.py --image evencomms:0.2.0 --speech-pcm /tmp/speech.pcm
 ```
+
+Add `--upgrade-from <local-prior-image>` to seed the data/model cache with an
+already-pulled prior image before starting the candidate image on the same
+volumes. The 0.2.0 release workflow uses the immutable 0.1.0 image for this check.
+The candidate's initializer is tested on both fresh and existing volumes,
+including literal managed-config installation and replacement of stale configs.
+Existing SQLite permissions are deliberately tightened to `0600`/UID 10001;
+message contents and model-cache contents/metadata must survive unchanged.
 
 Without `--speech-pcm`, inference is disabled for quick local checks. With it,
 the fixture must be raw, mono, 16 kHz, signed 16-bit little-endian PCM, at most
@@ -16,7 +24,8 @@ espeak and ffmpeg. Transcription must recognize at least one of those words,
 ignoring punctuation and case; it is never mocked.
 
 The script creates an empty, dedicated Docker volume, prepares it with
-`python -m backend.init_data` as root from the same image, and boots the default
+`python -m backend.init_data --config-dir /config` as root from the same image,
+using a separate managed-config volume, and boots the default
 UID/GID 10001 application with a read-only root filesystem and dropped
 capabilities. It checks static pages, bearer authentication, pairing, messages,
 authenticated WebSocket readiness/ping with same-host and explicitly allowed
@@ -111,6 +120,12 @@ necessarily in FFmpeg's process arguments and travels over plaintext RTMP: use a
 trusted machine/network, avoid process listings/debug traces and disable/redact
 external service access logs. CI runs this test after the existing Compose health
 checks, using its already-installed browser and a separately installed FFmpeg.
+
+CI also starts the Umbrel development overlay with a separate data/config bind
+mount. It runs the real initializer, then boots the server, nginx and MediaMTX
+using only the generated config directory, and repeats real RTMP/browser checks.
+`deploy/umbrel/ci.override.yml` exposes web on loopback for this test. The actual
+Umbrel-supplied app proxy is not started or tested by that substitute.
 
 ## Publication
 

@@ -3,11 +3,11 @@ id: kunas-evencomms
 name: EVENCOMMS
 tagline: Local conversations between Even glasses and an operator
 category: social
-version: "0.1.0"
+version: "0.2.0"
 port: 28097
 description: >-
-  STAGING PACKAGE ONLY. Requires rebuilding evencomms:0.1.0 from current source;
-  the released 0.1.0 image lacks STREAM. No new registry release is supplied.
+  STAGING PACKAGE ONLY. Requires building evencomms:0.2.0 from source;
+  use KNS-Umbrel for the digest-pinned installable release package.
   Pair an Even Hub client with a
   browser operator, transcribe short English utterances locally on CPU,
   and optionally draft replies with an existing local Ollama server.
@@ -20,7 +20,7 @@ dependencies: []
 defaultUsername: ""
 deterministicPassword: true
 releaseNotes: >-
-  Unreleased STREAM staging; rebuild/redeploy all services and sync both config
-  templates before deployment. Validate glasses gestures, phone connectivity,
-  model latency, and target hardware before release. Publish and digest-pin
-  the image before promoting this package into an Umbrel store.
+  0.2.0 STREAM staging. Rebuild/redeploy all services; initialization installs
+  bundled nginx and MediaMTX configs automatically. Preserve the existing data
+  directory when updating. The KNS-Umbrel package supplies the published image
+  digest. Physical glasses and target-host acceptance testing remain necessary.

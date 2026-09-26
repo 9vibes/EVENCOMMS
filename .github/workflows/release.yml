@@ -86,10 +86,18 @@ jobs:
             "Please meet me at the north entrance. I am waiting at the north entrance."
           ffmpeg -hide_banner -loglevel error -y -i "$RUNNER_TEMP/speech.wav" \
             -ar 16000 -ac 1 -c:a pcm_s16le -f s16le "$RUNNER_TEMP/speech.pcm"
-      - name: Smoke-test exact image with cold CPU STT and persistent cache
+      - name: Pull prior release for in-place upgrade verification
+        run: docker pull ghcr.io/9vibes/evencomms:0.1.0@sha256:491e90e678e0b90ba72c50a262900a42a8738213cd654377a714b27a05befc84
+      - name: Verify fresh candidate with cold CPU STT and generated configs
         run: |
           python scripts/container_smoke.py \
             --image "$(cat "$RUNNER_TEMP/release-image-id")" \
+            --speech-pcm "$RUNNER_TEMP/speech.pcm"
+      - name: Verify 0.1.0 upgrade with real STT, configs and persistent data
+        run: |
+          python scripts/container_smoke.py \
+            --image "$(cat "$RUNNER_TEMP/release-image-id")" \
+            --upgrade-from ghcr.io/9vibes/evencomms:0.1.0@sha256:491e90e678e0b90ba72c50a262900a42a8738213cd654377a714b27a05befc84 \
             --speech-pcm "$RUNNER_TEMP/speech.pcm"
       - uses: docker/login-action@v3
         with:

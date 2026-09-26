@@ -7,38 +7,29 @@ The installable, digest-pinned package lives in
 The app ID is `kunas-evencomms`. Store metadata/assets must be completed during
 promotion.
 
-**STREAM is unreleased and requires rebuilding/redeploying all services.** The
-released `0.1.0` image lacks streaming. The unchanged `evencomms:0.1.0` tag here
-means a fresh local build of current source, not the published GHCR image.
-Do not modify the published KNS-Umbrel package for this staging deployment;
-promotion requires a future tagged release and separate review.
+**STREAM requires version 0.2.0 and deployment of all services.** The `0.1.0`
+image lacks streaming. The `evencomms:0.2.0` tag here is a local build, not the
+published GHCR reference. Use the KNS-Umbrel package for a normal installation;
+these development files do not update the live store automatically.
 
 ## Stage Locally
 
-1. From the EVENCOMMS repository root, run `docker build -t evencomms:0.1.0 .`
+1. From the EVENCOMMS repository root, run `docker build -t evencomms:0.2.0 .`
    on the target host. The frontend package and lockfile must be present.
-2. If building elsewhere, use `docker save evencomms:0.1.0` and `docker load`
+2. If building elsewhere, use `docker save evencomms:0.2.0` and `docker load`
    to transfer the image to the Umbrel Docker daemon. Build for the target
    architecture; a tag alone does not make an image multi-architecture.
 3. Use these files only in a separate local/test Umbrel app staging area under
    app ID `kunas-evencomms`, following that Umbrel version's development workflow.
    Do not copy this unpublishable package into the live KNS store.
-4. Synchronize **both** config templates into `${APP_DATA_DIR}/config` before
-   starting or redeploying. Use the staging launcher's exported `APP_DATA_DIR`:
-
-   ```sh
-   mkdir -p "${APP_DATA_DIR:?}/config"
-   cp deploy/umbrel/nginx.conf.template "${APP_DATA_DIR}/config/nginx.conf"
-   cp deploy/umbrel/mediamtx.yml.template "${APP_DATA_DIR}/config/mediamtx.yml"
-   chmod 755 "${APP_DATA_DIR}/config"
-   chmod 644 "${APP_DATA_DIR}/config/nginx.conf" "${APP_DATA_DIR}/config/mediamtx.yml"
-   ```
-
-   These templates are literal configuration, contain no secrets, and match
-   `infra/`. Do not run unrestricted `envsubst`: nginx's `$http_host` and upgrade
-   variables must survive unchanged. If the platform renders templates, verify
-   these exact destination files exist and match before deployment; absent bind
-   sources can become directories. Repeat synchronization after template changes.
+4. The init service installs both bundled `infra/` files into
+   `${APP_DATA_DIR}/config` automatically. The image is the source of truth; no
+   manual template copying or `envsubst` is needed. Nginx's `$http_host` and
+   upgrade variables remain literal. Config directories use mode `0755` and
+   managed files `0644`, readable by nginx UID 101. Both consumers mount the
+   whole config directory read-only, avoiding missing-file bind-mount races.
+   Existing managed configs are refreshed on initialization; do not customize
+   them in place. Unrelated files and the persistent data volume are untouched.
 5. Supply the environment through the staging launcher. Umbrel must supply
    `APP_DATA_DIR` and a nonempty `APP_PASSWORD`. The device's `.local` HTTP origin
    is allowed by default. Override `ALLOWED_ORIGINS` for IP access or other
@@ -75,8 +66,9 @@ official Alpine image's BusyBox `wget` against `/health`. All services have
 bounded JSON-file logs; nginx access logging is disabled.
 
 The application process runs as UID/GID `10001:10001`. A short-lived, networkless
-root `data_init` service initializes only `/data`, `/data/models`, and existing
-SQLite database/WAL/SHM files. Symlinks and hard-linked database files are rejected;
+root `data_init` service initializes `/data`, `/data/models`, and existing
+SQLite database/WAL/SHM files, and installs the two managed files into `/config`.
+Symlinks and hard-linked database/config files are rejected;
 ownership is not changed recursively. Restored model-cache files must retain
 UID/GID `10001:10001`. Use a dedicated app directory. The database and model cache
 persist under `${APP_DATA_DIR}/data`; the root filesystem is read-only.
@@ -113,11 +105,11 @@ Ollama with network/firewall rules since its API is normally unauthenticated.
 2. Build and test the image for each advertised platform with Debian/Python 3.12
    and Node 24. Verify STT wheels, a cold model download, cache reuse, volume
    permissions and phone/TLS operation. Do not advertise untested GPU support.
-3. For a future version (not released `0.1.0`), publish the release image to a
+3. For a new version, publish the release image to a
    registry you control, confirm it is publicly pullable, and record its immutable
    digest. The release workflow publishes
    tested amd64 images; the regular CI workflow does not publish.
-4. Replace **both** `evencomms:0.1.0` image references with the published
+4. Replace **both** `evencomms:0.2.0` image references with the published
    `registry/owner/image:<new-version>@sha256:<verified-digest>` and remove `pull_policy:
    never`. Do not promote a local-only tag or a made-up GHCR reference.
 5. Test a clean pull/install and an upgrade with existing data, then submit the

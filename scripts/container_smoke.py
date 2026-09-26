@@ -92,6 +92,7 @@ print(json.dumps(files))
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", required=True, help="Local Docker image tag or ID (never pulled)")
+    parser.add_argument("--upgrade-from", help="Optional local prior image for the first boot (never pulled)")
     parser.add_argument("--speech-pcm", type=Path,
                         help="Raw mono 16 kHz s16le speech mentioning 'north entrance'; enables real base.en STT")
     args = parser.parse_args()
@@ -105,25 +106,91 @@ def main():
     if image["Config"]["User"] != "10001:10001":
         raise RuntimeError("Image must default to user 10001:10001")
     image_id = image["Id"]
+    first_image = image_id
+    if args.upgrade_from:
+        previous = json.loads(docker("image", "inspect", args.upgrade_from))[0]
+        if (previous["Os"] != "linux" or previous["Architecture"] != "amd64"
+                or previous["Config"]["User"] != "10001:10001"):
+            raise RuntimeError("Upgrade source must be a linux/amd64 app image using 10001:10001")
+        first_image = previous["Id"]
     name = "evencomms-smoke-" + uuid4().hex[:12]
     volume = name + "-data"
+    config_volume = name + "-config"
     password = secrets.token_urlsafe(32)
     environment = {"ADMIN_PASSWORD": password}
     explicit_origin = "https://smoke.example.test"
-    created_volume = False
+    created_volumes = []
     try:
-        docker("volume", "create", volume)
-        created_volume = True
-        # Same image, root only for the dedicated data-volume permission initializer.
-        docker("run", "--rm", "--name", name + "-init", "--pull=never",
-               "--user", "0:0", "--read-only", "--network", "none",
-               "--security-opt", "no-new-privileges:true",
-               "--mount", f"type=volume,source={volume},target=/data,volume-nocopy",
-               image_id, "python", "-m", "backend.init_data")
+        for owned_volume in (volume, config_volume):
+            # Track our unique name even if Docker creates it but the CLI times out.
+            created_volumes.append(owned_volume)
+            docker("volume", "create", owned_volume)
+        # Same offline, read-only root initializer used at install and upgrade time.
+        initializer = (
+            "run", "--rm", "--name", name + "-init", "--pull=never",
+            "--user", "0:0", "--read-only", "--network", "none",
+            "--security-opt", "no-new-privileges:true",
+            "--mount", f"type=volume,source={volume},target=/data,volume-nocopy",
+            "--mount", f"type=volume,source={config_volume},target=/config,volume-nocopy",
+            image_id,
+        )
+        snapshot_script = """
+import hashlib
+import json
+import stat
+from pathlib import Path
+root = Path('/data')
+snapshot = {}
+for path in sorted(root.rglob('*')):
+    if path.is_file():
+        info = path.stat()
+        with path.open('rb') as content:
+            digest = hashlib.file_digest(content, 'sha256').hexdigest()
+        snapshot[str(path.relative_to(root))] = [
+            digest, info.st_size, info.st_mtime_ns, stat.S_IMODE(info.st_mode),
+            info.st_uid, info.st_gid,
+        ]
+print(json.dumps(snapshot, sort_keys=True))
+"""
         saved_message = None
         wearer = None
         cache = None
         for attempt in range(2):
+            boot_image = first_image if attempt == 0 else image_id
+            if attempt:
+                docker(*initializer, "python", "-c", """
+from pathlib import Path
+for name in ('nginx.conf', 'mediamtx.yml'):
+    Path('/config', name).write_bytes(b'stale config from previous release')
+marker = Path('/data/models/smoke-preserved-custom-file')
+marker.write_bytes(b'custom model cache content')
+marker.chmod(0o640)
+""")
+            before_init = json.loads(docker(*initializer, "python", "-c", snapshot_script))
+            # Existing SQLite files are deliberately tightened to the app user's 0600.
+            for path, info in before_init.items():
+                if path in {"evencomms.sqlite3", "evencomms.sqlite3-wal", "evencomms.sqlite3-shm"}:
+                    info[3:] = [0o600, 10001, 10001]
+            docker(*initializer, "python", "-m", "backend.init_data", "--config-dir", "/config")
+            assert json.loads(docker(*initializer, "python", "-c", snapshot_script)) == before_init
+            docker("run", "--rm", "--name", name + "-init", "--pull=never",
+                   "--user", "101:101", "--read-only", "--network", "none", "--cap-drop", "ALL",
+                   "--security-opt", "no-new-privileges:true",
+                   "--mount", f"type=volume,source={config_volume},target=/config,readonly,volume-nocopy",
+                   image_id, "python", "-c", """
+import os
+import stat
+from pathlib import Path
+assert os.getuid() == os.getgid() == 101
+target = Path('/config')
+assert stat.S_IMODE(target.stat().st_mode) == 0o755
+assert {p.name for p in target.iterdir()} == {'nginx.conf', 'mediamtx.yml'}
+for name in ('nginx.conf', 'mediamtx.yml'):
+    installed = target / name
+    assert installed.read_bytes() == Path('/app/infra', name).read_bytes()
+    assert stat.S_IMODE(installed.stat().st_mode) == 0o644
+assert b'$http_host' in (target / 'nginx.conf').read_bytes()
+""")
             print(f"Starting {'fresh' if attempt == 0 else 'replacement'} container", flush=True)
             docker("run", "--detach", "--name", name, "--pull=never", "--init",
                    "--read-only", "--cap-drop", "ALL",
@@ -134,9 +201,9 @@ def main():
                    "--env", "ADMIN_PASSWORD", "--env", "OLLAMA_URL=",
                    "--env", f"ALLOWED_ORIGINS={explicit_origin}",
                    "--env", f"STT_ENABLED={'true' if pcm is not None else 'false'}",
-                   "--env", "STT_TIMEOUT=140", image_id, env=environment)
+                    "--env", "STT_TIMEOUT=140", boot_image, env=environment)
             info = json.loads(docker("inspect", name))[0]
-            assert info["Image"] == image_id
+            assert info["Image"] == boot_image
             assert info["HostConfig"]["ReadonlyRootfs"]
             port = info["NetworkSettings"]["Ports"]["8000/tcp"][0]["HostPort"]
             base = "http://127.0.0.1:" + port
@@ -195,12 +262,17 @@ assert os.access("/data/models", os.W_OK)
                 cache = current_cache
             docker("stop", "--time", "15", name)
             docker("rm", name)
-        print("Smoke passed: non-root, read-only, auth, WebSocket origins, database persistence"
+        print("Smoke passed: non-root, read-only, auth, WebSocket origins, database persistence,"
+              " image-managed configs readable by UID 101, config upgrade and initializer data preservation"
               + (", real CPU STT and persistent model cache" if pcm is not None else " (STT skipped)"))
     finally:
-        docker("rm", "--force", name, name + "-init", check=False)
-        if created_volume:
-            docker("volume", "rm", volume, check=False)
+        cleanup = [("rm", "--force", name, name + "-init")]
+        cleanup.extend(("volume", "rm", owned_volume) for owned_volume in reversed(created_volumes))
+        for command in cleanup:
+            try:
+                docker(*command, check=False)
+            except (OSError, subprocess.TimeoutExpired):
+                print("Warning: Docker smoke resource cleanup failed", flush=True)
 
 
 if __name__ == "__main__":
