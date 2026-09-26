@@ -87,7 +87,9 @@ jobs:
           ffmpeg -hide_banner -loglevel error -y -i "$RUNNER_TEMP/speech.wav" \
             -ar 16000 -ac 1 -c:a pcm_s16le -f s16le "$RUNNER_TEMP/speech.pcm"
       - name: Pull prior release for in-place upgrade verification
-        run: docker pull ghcr.io/9vibes/evencomms:0.1.0@sha256:491e90e678e0b90ba72c50a262900a42a8738213cd654377a714b27a05befc84
+        run: |
+          docker pull ghcr.io/9vibes/evencomms:0.1.0@sha256:491e90e678e0b90ba72c50a262900a42a8738213cd654377a714b27a05befc84
+          docker pull ghcr.io/9vibes/evencomms:0.2.1@sha256:847d7e3c3b331da64ee6f73e2710162aa72a78bd282d1b3027dde27c45ae14e2
       - name: Verify fresh candidate with cold CPU STT and generated configs
         run: |
           python scripts/container_smoke.py \
@@ -98,6 +100,12 @@ jobs:
           python scripts/container_smoke.py \
             --image "$(cat "$RUNNER_TEMP/release-image-id")" \
             --upgrade-from ghcr.io/9vibes/evencomms:0.1.0@sha256:491e90e678e0b90ba72c50a262900a42a8738213cd654377a714b27a05befc84 \
+            --speech-pcm "$RUNNER_TEMP/speech.pcm"
+      - name: Verify 0.2.1 upgrade with real STT, configs and persistent data
+        run: |
+          python scripts/container_smoke.py \
+            --image "$(cat "$RUNNER_TEMP/release-image-id")" \
+            --upgrade-from ghcr.io/9vibes/evencomms:0.2.1@sha256:847d7e3c3b331da64ee6f73e2710162aa72a78bd282d1b3027dde27c45ae14e2 \
             --speech-pcm "$RUNNER_TEMP/speech.pcm"
       - uses: docker/login-action@v3
         with:

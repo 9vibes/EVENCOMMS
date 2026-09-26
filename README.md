@@ -4,9 +4,15 @@ Local communication between an Even glasses wearer and a browser operator.
 The wearer edits a private draft, sends a question, and reads the operator's
 reply on the glasses. English speech transcription runs locally; an existing
 local Ollama server can suggest a reply, but **the operator must review and send
-it**. There is no cloud inference integration and no automatic AI reply.
+it**. Wearer assistance remains local and human-approved. The separate optional
+RESEARCH tab can send an operator's questions and selected still frames to OpenAI;
+it never automatically replies to the glasses.
 
-Version `0.2.1` adds live RTMP monitoring. The installable Umbrel package is maintained
+Version `0.3.0` adds operator-only OpenAI Research, selected video-frame captures,
+1x to 4x digital zoom/pan, and Low-Latency HLS with 200 ms parts and a one-second
+browser live-sync target, not a latency guarantee. Published artifacts and check
+results are recorded on the [release page](https://github.com/9vibes/EVENCOMMS/releases).
+The installable Umbrel package is maintained
 in [KNS-Umbrel](https://github.com/9vibes/KNS-Umbrel/tree/master/kunas-evencomms).
 The files in `deploy/umbrel` remain local-development templates, not the store's
 digest-pinned release package. See [the protocol](docs/protocol.md) for API
@@ -14,14 +20,37 @@ contracts. Physical G2/phone behavior still needs hardware acceptance testing.
 
 **OPERATOR / STREAM** switches between conversations and a full-width live RTMP
 feed with authenticated HLS playback, without recording or transcoding. Updating
-from `0.1.0` requires redeploying the full stack, including nginx and MediaMTX,
+from `0.1.0` or `0.2.1` requires redeploying the full stack, including nginx and MediaMTX,
 not just replacing the frontend. Keep the existing app installation and back up
 its data first; do not uninstall. The app ID, web port, password, conversations,
 wearer pairings and model cache are preserved. Managed proxy/media configuration
 is installed automatically by the image's init service. See the
 [stream deployment and OBS guide](docs/streaming.md).
 
-## First-Version Interaction
+## Operator And Wearer Interaction
+
+### Research (0.3.0)
+
+The **RESEARCH** tab beside STREAM provides an OpenAI chat, an available-model
+selector, and a live preview with **Capture frame**. A capture includes video
+pixels at the current zoom/pan, not page controls, and stays in the draft until
+you explicitly choose **Send to OpenAI**. Text-only questions work without a feed.
+
+Connect your own OpenAI API key for the current sign-in over HTTPS/localhost,
+or configure `OPENAI_API_KEY` on the server. Keys entered in the UI stay only in
+server memory for that operator session. Available model IDs come from OpenAI;
+choose a Responses/vision-compatible model rather than assuming every ID supports
+images. OpenAI API billing and retention rules apply, separately from ChatGPT.
+
+Research chat/images remain in browser memory and clear on reload, logout or New chat.
+No frames, microphone audio, stream keys or wearer messages are sent automatically.
+Send includes the displayed history and its attached stills; no live feed is sent
+to OpenAI and no web-search tools are enabled. Requests use `store: false`, not a
+zero-retention guarantee. Provider testing uses MockTransport and browser stubs,
+not live OpenAI calls. See
+[Research setup and privacy](docs/research.md).
+
+### Wearer Controls
 
 - The glasses screen switches between the unsent draft and latest operator reply,
   with swipe navigation for longer text. The phone mirrors both.
@@ -90,7 +119,7 @@ curl --fail http://127.0.0.1:28097/health
    simulation**. This does not promise browser microphone capture or validate
    real glasses audio.
 
-The locally built tag is `evencomms:0.2.1`; no registry pull is needed or claimed.
+The locally built tag is `evencomms:0.3.0`; no registry pull is needed or claimed.
 The API binds port `8000` inside the private network and is **never published**.
 The only HTTP entry is `web` nginx on container port `8080`, published as host
 `28097`, bound to loopback by default. For isolated LAN testing set
@@ -131,9 +160,10 @@ For a containerized proxy, connect it to the app's Docker network and proxy
 all-method blocks for exact `/internal` and the `/internal/` prefix. Keep the
 backend unpublished and allow external browser access only through TLS.
 Preserve Host, forward WebSocket Upgrade, and do not strip `/api` or other
-paths. Set proxy response timeouts above `STT_TIMEOUT` and `OLLAMA_TIMEOUT`;
-allow the 480000-byte audio request plus framing. Avoid logging credentials,
-request bodies, transcription text or replies at the proxy.
+paths. Set proxy response timeouts above `STT_TIMEOUT`, `OLLAMA_TIMEOUT` and
+`OPENAI_TIMEOUT`; allow up to 9 MiB for Research chat requests and the 480000-byte
+audio request plus framing. Backend route-specific limits still apply. Avoid
+logging credentials, request bodies, transcription text or replies at the proxy.
 
 Set this in `.env` and recreate the service:
 
@@ -207,6 +237,9 @@ deployment files alone do not provide them.
 | `OLLAMA_URL` | See below | Existing local Ollama API base URL, not `/api/chat`. |
 | `OLLAMA_MODEL` | `llama3.2:3b` | Model already installed in that Ollama server. |
 | `OLLAMA_TIMEOUT` | `30` | Suggestion deadline in seconds. |
+| `OPENAI_API_KEY` | Empty | Optional shared server-managed key for Research; alternatively connect a sign-in-only key in the HTTPS UI. Never expose through frontend environment variables. |
+| `OPENAI_TIMEOUT` | `90` | Research provider deadline, greater than zero and at most 110 seconds. |
+| `OPENAI_MAX_OUTPUT_TOKENS` | `2048` | Research output cap, 256..8192; API usage is billable. |
 | `MAX_SESSIONS` | `100` | Stored conversation limit. |
 | `MAX_MESSAGES_PER_SESSION` | `1000` | Stored messages per conversation. |
 | `DATABASE_PATH` | `/data/evencomms.sqlite3` in image | SQLite database, including adjacent WAL files. |
@@ -251,6 +284,11 @@ behavior on the target hardware before tuning models or considering GPU work.
 - Pairing codes last five minutes and are single use. Operator tokens last
   eight hours and are lost on server restart. Wearer pairing persists until its
   conversation is deleted. A server restart requires operator login again.
+- Research requests allow 20 messages, 6 JPEGs total and 3 per user turn, each
+  at most 1 MiB and 1280 pixels per side, within a 9 MiB chat-body limit. Two
+  off-event-loop validation slots and two separate provider-call slots each
+  allow one request per operator; excess work receives `429`, not an unbounded
+  CPU queue. History is never silently shortened to fit.
 - Ollama failure does not prevent a manual operator reply. Suggestions use
   bounded recent conversation context and remain editable, never auto-sent.
 
@@ -261,6 +299,15 @@ Audio is sent to the local backend for transcription and is not written as raw
 audio to application storage. Sent conversation text is stored in SQLite; only
 an explicit suggestion request sends bounded recent text to the configured
 local Ollama instance. This is not end-to-end encryption from the server.
+
+Research is a separate, opt-in cloud workflow: Send to OpenAI submits its displayed
+chat history and selected JPEG still frames to OpenAI, not to the wearer. It does
+not send continuous video/audio, stream keys or wearer drafts. Research history
+and captures are browser-memory-only; a bounded server result cache supports
+recent retries. UI-entered API keys are isolated per sign-in in server RAM and
+clear on logout, expiry, explicit Research disconnect or restart. A server
+environment key is shared by authenticated operators. Provider billing/retention policies still apply even
+with `store: false`. Use a private deployment for sensitive footage.
 
 Wearer drafts/tokens use browser `localStorage`; operator authentication uses
 `sessionStorage`. These are not encrypted vaults: protect browser profiles,
@@ -315,8 +362,11 @@ npm run test:e2e
 These commands run from `frontend`; `python3` must have the backend test/runtime
 dependencies. Set `EVENCOMMS_PYTHON` to a virtualenv Python if needed, and
 `CHROMIUM_PATH` to use an existing Chromium. Test databases are temporary and
-model inference is disabled. The only mocked HTTP response in browser tests is
-the AI suggestion. See [browser tests](frontend/e2e/README.md).
+model inference is disabled. The conversation browser tests mock the AI suggestion;
+the separate Research smoke stubs `/api/research/**`, while authentication and
+video playback remain real. Backend provider tests use MockTransport. Neither
+suite verifies live OpenAI model compatibility, billing or retention. See
+[browser tests](frontend/e2e/README.md) and [Research smoke checks](scripts/README.md#research-real-frame-browser-smoke).
 
 For the official desktop simulator, run `npm run simulate` alongside Vite.
 The simulator needs a supported desktop OS and its native GUI/WebKit libraries;

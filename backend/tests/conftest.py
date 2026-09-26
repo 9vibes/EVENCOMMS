@@ -8,6 +8,14 @@ from backend.config import Settings
 from backend.main import create_app
 
 
+@pytest.fixture(autouse=True)
+def isolated_openai_environment(monkeypatch):
+    # Never read or use a developer's provider credentials, including from_env tests.
+    monkeypatch.setenv("OPENAI_API_KEY", "")
+    monkeypatch.setenv("OPENAI_TIMEOUT", "90")
+    monkeypatch.setenv("OPENAI_MAX_OUTPUT_TOKENS", "2048")
+
+
 @pytest.fixture
 def make_client(tmp_path):
     with ExitStack() as stack:

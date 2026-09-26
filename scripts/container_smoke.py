@@ -89,6 +89,18 @@ print(json.dumps(files))
 """))
 
 
+def stream_secret_hashes(container):
+    return json.loads(docker("exec", container, "python", "-c", """
+import hashlib
+import json
+import sqlite3
+with sqlite3.connect('/data/evencomms.sqlite3') as database:
+    exists = database.execute("SELECT 1 FROM sqlite_master WHERE name='stream_settings'").fetchone()
+    row = database.execute('SELECT publisher_secret, reader_secret FROM stream_settings WHERE id=1').fetchone() if exists else None
+print(json.dumps([hashlib.sha256(value.encode()).hexdigest() for value in row] if row else None))
+"""))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", required=True, help="Local Docker image tag or ID (never pulled)")
@@ -155,6 +167,7 @@ print(json.dumps(snapshot, sort_keys=True))
         saved_message = None
         wearer = None
         cache = None
+        stream_secrets = None
         for attempt in range(2):
             boot_image = first_image if attempt == 0 else image_id
             if attempt:
@@ -201,7 +214,7 @@ assert b'$http_host' in (target / 'nginx.conf').read_bytes()
                    "--env", "ADMIN_PASSWORD", "--env", "OLLAMA_URL=",
                    "--env", f"ALLOWED_ORIGINS={explicit_origin}",
                    "--env", f"STT_ENABLED={'true' if pcm is not None else 'false'}",
-                    "--env", "STT_TIMEOUT=140", boot_image, env=environment)
+                   "--env", "STT_TIMEOUT=140", boot_image, env=environment)
             info = json.loads(docker("inspect", name))[0]
             assert info["Image"] == boot_image
             assert info["HostConfig"]["ReadonlyRootfs"]
@@ -233,6 +246,7 @@ assert os.access("/data/models", os.W_OK)
             assert status["stt_enabled"] == (pcm is not None)
             assert status["stt_model"] == "base.en"
             if attempt == 0:
+                stream_secrets = stream_secret_hashes(name)
                 code = request(base, "/api/pairings", token=operator, data={})["code"]
                 wearer = request(base, "/api/pair", data={"code": code, "name": "Release smoke"})
                 saved_message = request(base, "/api/messages", token=wearer["token"],
@@ -241,6 +255,8 @@ assert os.access("/data/models", os.W_OK)
                     docker("exec", name, "python", "-c",
                            'from pathlib import Path; assert not any(p.is_file() for p in Path("/data/models").rglob("*"))')
             else:
+                if stream_secrets is not None:
+                    assert stream_secret_hashes(name) == stream_secrets
                 assert request(base, "/api/me", token=wearer["token"])["messages"] == [saved_message]
                 assert any(row["id"] == wearer["session_id"]
                            for row in request(base, "/api/sessions", token=operator))

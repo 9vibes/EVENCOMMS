@@ -51,7 +51,8 @@ class MediaResponse(StreamingResponse):
     async def chunks(self):
         size = 0
         deadline = asyncio.get_running_loop().time() + 30
-        chunks = self.upstream.aiter_bytes(65536)
+        # Forward available bytes without aggregating small low-latency parts.
+        chunks = self.upstream.aiter_bytes()
         try:
             while True:
                 async with asyncio.timeout_at(deadline):

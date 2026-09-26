@@ -48,6 +48,9 @@ class Settings:
     ollama_url: str = "http://127.0.0.1:11434"
     ollama_model: str = "llama3.2:3b"
     ollama_timeout: float = 30
+    openai_api_key: str = field(default="", repr=False)
+    openai_timeout: float = 90
+    openai_max_output_tokens: int = 2048
     max_sessions: int = 100
     max_messages_per_session: int = 1000
     stream_enabled: bool = False
@@ -70,6 +73,10 @@ class Settings:
                   self.stt_timeout, self.ollama_timeout)
         if any(not isfinite(value) or value <= 0 for value in limits):
             raise ValueError("Limits and timeouts must be finite and positive")
+        if not isfinite(self.openai_timeout) or not 0 < self.openai_timeout <= 110:
+            raise ValueError("OPENAI_TIMEOUT must be finite, positive and at most 110 seconds")
+        if type(self.openai_max_output_tokens) is not int or not 256 <= self.openai_max_output_tokens <= 8192:
+            raise ValueError("OPENAI_MAX_OUTPUT_TOKENS must be an integer from 256 to 8192")
         if type(self.stream_enabled) is not bool or type(self.cookie_secure) is not bool:
             raise ValueError("STREAM_ENABLED and COOKIE_SECURE must be booleans")
         if type(self.rtmp_port) is not int or not 1 <= self.rtmp_port <= 65535:
@@ -105,6 +112,9 @@ class Settings:
             ollama_url=os.getenv("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/"),
             ollama_model=os.getenv("OLLAMA_MODEL", "llama3.2:3b"),
             ollama_timeout=float(os.getenv("OLLAMA_TIMEOUT", "30")),
+            openai_api_key=os.getenv("OPENAI_API_KEY", ""),
+            openai_timeout=float(os.getenv("OPENAI_TIMEOUT", "90")),
+            openai_max_output_tokens=int(os.getenv("OPENAI_MAX_OUTPUT_TOKENS", "2048")),
             max_sessions=int(os.getenv("MAX_SESSIONS", "100")),
             max_messages_per_session=int(os.getenv("MAX_MESSAGES_PER_SESSION", "1000")),
             stream_enabled=env_bool("STREAM_ENABLED", "false"),

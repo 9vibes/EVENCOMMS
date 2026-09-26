@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, errorText, request } from './api';
 import LivePlayer from './LivePlayer';
+import type { CapturedFrame } from './videoView';
 
 interface StreamStatus {
   enabled: boolean;
@@ -20,7 +21,14 @@ interface StreamSettings {
   rtmp_port: number;
 }
 
-export default function StreamTab({ token, onUnauthorized }: { token: string; onUnauthorized: () => void }) {
+export default function StreamTab({ token, onUnauthorized, compact = false, onCapture, onCaptureStateChange, captureDisabled = false }: {
+  token: string;
+  onUnauthorized: () => void;
+  compact?: boolean;
+  onCapture?: (frame: CapturedFrame) => void;
+  onCaptureStateChange?: (capturing: boolean) => void;
+  captureDisabled?: boolean;
+}) {
   const [status, setStatus] = useState<StreamStatus | null>(null);
   const [statusError, setStatusError] = useState('');
   const [authorized, setAuthorized] = useState(false);
@@ -93,7 +101,7 @@ export default function StreamTab({ token, onUnauthorized }: { token: string; on
     setSettingsError('');
     setShowKey(false);
     setCopyNotice('');
-    if (!revealed) return;
+    if (!revealed || compact) return;
     const controller = new AbortController();
     void request<StreamSettings>('/api/stream/settings', token, controller.signal)
       .then((result) => {
@@ -105,7 +113,7 @@ export default function StreamTab({ token, onUnauthorized }: { token: string; on
         else setSettingsError(errorText(failure));
       });
     return () => { controller.abort(); settingsRef.current = null; };
-  }, [revealed, token, onUnauthorized]);
+  }, [revealed, token, onUnauthorized, compact]);
 
   async function copy(field: 'server_url' | 'stream_key') {
     const current = settingsRef.current;
@@ -137,8 +145,11 @@ export default function StreamTab({ token, onUnauthorized }: { token: string; on
         authorizationError={playbackError}
         session={status?.publisher_session_id ?? null}
         onUnauthorized={playbackExpired}
+        onCapture={onCapture}
+        onCaptureStateChange={onCaptureStateChange}
+        captureDisabled={captureDisabled}
       />
-      <dl className="op-stream-telemetry">
+      {!compact && <><dl className="op-stream-telemetry">
         <div><dt>Source bitrate</dt><dd>{status?.bitrate_mbps == null ? 'Not reported' : `${status.bitrate_mbps.toFixed(2)} Mbps`}</dd></div>
         <div><dt>Tracks</dt><dd>{status?.tracks.length ? status.tracks.join(' / ') : 'Not reported'}</dd></div>
         <div><dt>Publisher started</dt><dd>{started && !Number.isNaN(started.getTime()) ? <time dateTime={status!.started_at!}>{started.toLocaleString()}</time> : 'Not reported'}</dd></div>
@@ -150,6 +161,7 @@ export default function StreamTab({ token, onUnauthorized }: { token: string; on
         </button>
         {revealed && <div id="encoder-config" className="op-stream-config-body">
           <p>RTMP is plaintext, even when this console uses HTTPS. Use a trusted LAN/VPN and restrict ingest to TCP {settings?.rtmp_port ?? 21936}. Recommended: H.264 video, AAC audio, one-second keyframes.</p>
+          <p className="op-fine-print">For lower delay, disable OBS stream delay and use a low-latency encoder preset where available. Native Apple HLS playback requires HTTPS.</p>
           <p className="op-fine-print">An HTTP preview tunnel does not forward RTMP. PUBLIC_HOST must point to the encoder-reachable LAN/VPN address of your Stone.</p>
           {settingsError ? <p role="alert" className="op-error-text">{settingsError} Hide and reveal to retry.</p> : !settings ? <p role="status">Loading encoder configuration...</p> : <>
             <label htmlFor="rtmp-server">RTMP server</label>
@@ -161,6 +173,7 @@ export default function StreamTab({ token, onUnauthorized }: { token: string; on
           <p role="status">{copyNotice}</p>
         </div>}
       </section>
+      </>}
     </div>
   );
 }

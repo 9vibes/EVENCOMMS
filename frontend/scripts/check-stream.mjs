@@ -81,6 +81,77 @@ async function check() {
   const cookie = (await context.cookies()).find(item => item.name === 'evencomms_playback');
   expect(Boolean(cookie?.httpOnly && cookie.sameSite === 'Strict' && cookie.path === '/api/stream/live/')).toBe(true);
 
+  stage = 'zoom and pan preserve the video element and media source';
+  const zoomVideo = await page.locator('video').elementHandle();
+  const sourceBeforeZoom = await zoomVideo.evaluate(video => video.currentSrc);
+  const frame = page.locator('.op-live-frame');
+  const zoomIn = page.getByRole('button', { name: 'Zoom in', exact: true });
+  const zoomOut = page.getByRole('button', { name: 'Zoom out', exact: true });
+  const resetView = page.getByRole('button', { name: 'Reset view', exact: true });
+  await expect(zoomOut).toBeDisabled();
+  await zoomIn.click();
+  await zoomIn.click();
+  await expect(frame).toHaveAttribute('data-zoom', '2');
+  await expect(page.getByLabel('Zoom level', { exact: true })).toHaveText('200%');
+  expect(await zoomVideo.evaluate(video => video.controls)).toBe(false);
+  const pan = page.getByRole('region', { name: 'Pan zoomed video', exact: true });
+  await pan.focus();
+  await pan.press('ArrowRight');
+  await pan.press('ArrowDown');
+  await expect.poll(() => zoomVideo.evaluate(video => new DOMMatrixReadOnly(getComputedStyle(video).transform).e)).toBeGreaterThan(0);
+  await pan.scrollIntoViewIfNeeded();
+  const box = await pan.boundingBox();
+  await page.mouse.move(box.x + 15, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width - 15, box.y + box.height / 2, { steps: 5 });
+  await page.mouse.up();
+  expect(await zoomVideo.evaluate(video => {
+    const transform = new DOMMatrixReadOnly(getComputedStyle(video).transform);
+    return transform.a === 2 && transform.e > 0 && transform.e <= video.parentElement.clientWidth / 2 + 1;
+  })).toBe(true);
+  expect(await zoomVideo.evaluate(video => video === document.querySelector('video') && !video.paused)).toBe(true);
+  expect(await zoomVideo.evaluate(video => video.currentSrc)).toBe(sourceBeforeZoom);
+  await page.getByRole('button', { name: 'Unmute video', exact: true }).click();
+  expect(await zoomVideo.evaluate(video => video.muted)).toBe(false);
+  await page.getByRole('button', { name: 'Mute video', exact: true }).click();
+  expect(await zoomVideo.evaluate(video => video.muted)).toBe(true);
+  for (let step = 0; step < 4; step++) await zoomIn.click();
+  await expect(frame).toHaveAttribute('data-zoom', '4');
+  await expect(zoomIn).toBeDisabled();
+  for (let step = 0; step < 6; step++) await zoomOut.click();
+  await expect(frame).toHaveAttribute('data-zoom', '1');
+  await expect(zoomOut).toBeDisabled();
+  expect(await zoomVideo.evaluate(video => video.controls)).toBe(true);
+  await zoomIn.click();
+  await resetView.click();
+  expect(await zoomVideo.evaluate(video => {
+    const m = new DOMMatrixReadOnly(getComputedStyle(video).transform);
+    return m.a === 1 && m.e === 0 && m.f === 0;
+  })).toBe(true);
+
+  stage = 'container fullscreen keeps zoom controls available';
+  const fullscreen = page.getByRole('button', { name: 'Fullscreen', exact: true });
+  if (await fullscreen.isEnabled()) {
+    await zoomIn.click();
+    await fullscreen.click();
+    await expect.poll(() => page.evaluate(() => document.fullscreenElement?.classList.contains('op-live-player'))).toBe(true);
+    await expect(zoomIn).toBeVisible();
+    await page.getByRole('button', { name: 'Exit fullscreen', exact: true }).click();
+    await expect.poll(() => page.evaluate(() => document.fullscreenElement === null)).toBe(true);
+    await resetView.click();
+  }
+
+  stage = 'manual pause remains paused with latency catch-up enabled';
+  await zoomIn.click();
+  await page.getByRole('button', { name: 'Pause video', exact: true }).click();
+  await expect(page.getByText('Preview paused. Use the player controls to resume.', { exact: true })).toBeVisible();
+  await page.waitForTimeout(2500);
+  expect(await page.locator('video').evaluate(video => video.paused)).toBe(true);
+  await zoomIn.click();
+  expect(await page.locator('video').evaluate(video => video.paused)).toBe(true);
+  await page.getByRole('button', { name: 'Play video', exact: true }).click();
+  await playing();
+
   stage = 'responsive full-width 16:9 layout';
   for (const width of [1440, 390, 320]) {
     await page.setViewportSize({ width, height: 1000 });
@@ -91,6 +162,27 @@ async function check() {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     expect(frame.x >= 0 && frame.x + frame.width <= width + 1).toBe(true);
   }
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await resetView.click();
+
+  stage = 'touch drag pans zoomed video without scrolling the page';
+  await page.setViewportSize({ width: 390, height: 1000 });
+  await zoomIn.click();
+  await zoomIn.click();
+  await pan.scrollIntoViewIfNeeded();
+  const touchBox = await pan.boundingBox();
+  const touch = await context.newCDPSession(page);
+  await touch.send('Emulation.setTouchEmulationEnabled', { enabled: true });
+  const touchPoint = { x: touchBox.x + touchBox.width / 2, y: touchBox.y + touchBox.height / 2, id: 1 };
+  const scrollBeforePan = await page.evaluate(() => scrollY);
+  await touch.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [touchPoint] });
+  await touch.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ ...touchPoint, x: touchPoint.x + 40, y: touchPoint.y + 20 }] });
+  await touch.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await expect.poll(() => zoomVideo.evaluate(video => new DOMMatrixReadOnly(getComputedStyle(video).transform).e)).toBeGreaterThan(0);
+  expect(await page.evaluate(() => scrollY)).toBe(scrollBeforePan);
+  await touch.send('Emulation.setTouchEmulationEnabled', { enabled: false });
+  await touch.detach();
+  await resetView.click();
   await page.setViewportSize({ width: 1440, height: 1000 });
 
   stage = 'missing-cookie recovery using real HTTP';

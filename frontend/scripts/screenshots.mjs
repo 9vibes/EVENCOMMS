@@ -186,7 +186,7 @@ try {
   stage = 'checking wearer overflow and privacy'
   await checkPage(wearer, secrets)
   for (const [page, selector] of [
-    [operator, '.op-message-list'], [operator, '.op-preview-screen > p'],
+    [operator, '#panel-operator .op-message-list'], [operator, '.op-preview-screen > p'],
     [wearer, '.glasses-preview pre'], [wearer, '.phone-reply'],
   ]) {
     stage = `checking unclipped content in ${selector}`

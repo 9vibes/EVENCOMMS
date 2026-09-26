@@ -1,7 +1,7 @@
 # EVENCOMMS Store Assets
 
-Source assets for EVENCOMMS **0.2.1** integration into KNS-Umbrel. Captured from
-the release's already-built `frontend/dist`; the operator footer reads `v0.2`.
+Source assets for EVENCOMMS **0.3.0** integration into KNS-Umbrel. Captured from
+the release's already-built `frontend/dist`; desktop footers read `v0.3`.
 No store manifests or application files are changed here.
 
 | File | Format / Size | Purpose |
@@ -9,7 +9,8 @@ No store manifests or application files are changed here.
 | `icon.svg` | SVG, 512 x 512 viewBox | Hand-drawn geometric glasses and chat mark, warm amber `#eeb653` and dark charcoal `#101210`, rounded tile. No fonts or external resources. |
 | `screenshot-operator.png` | PNG, 1440 x 1161 | Full-page desktop operator console captured at a 1440 x 1000 viewport, Alex's submitted question, human reply, and text preview. |
 | `screenshot-wearer.png` | PNG, 390 x 1575 | Full-page wearer browser simulation captured at a 390 x 844 phone viewport, including the reply and empty private draft. |
-| `screenshot-stream.png` | PNG, 1440 x 1376 | Full-page desktop STREAM view at a 1440 x 1000 viewport, including CONTROL ROOM / OPERATOR / STREAM, heading, decoded synthetic video, playing status, collapsed encoder configuration, and footer. |
+| `screenshot-stream.png` | PNG, 1440 x 1444 | Full-page desktop STREAM view at a 1440 x 1000 viewport, including CONTROL ROOM / OPERATOR / STREAM / RESEARCH, heading, decoded synthetic video, current zoom toolbar, playing status, collapsed encoder configuration, and footer. |
+| `screenshot-research.png` | PNG, 1440 x 1730 | Full-page desktop RESEARCH view at a 1440 x 1000 viewport, live video at 150% zoom, native snapshot thumbnail and unsent question. OpenAI is not configured; key blank, model unselected, Send disabled. |
 
 The screenshots use the current built app and its SteamLab-style KUNAS theme,
 without injected styling, compositing, mocked API responses, or altered UI copy.
@@ -25,6 +26,8 @@ SIMULATION**, not a physical glasses capture. STT is disabled; AI is configured
 only to the fixture's unreachable `127.0.0.1:1` endpoint. No audio, transcription,
 AI suggestion, or live model is used. "Configured" in the real UI is not a model
 health claim; the operator preview is not a device delivery receipt.
+OpenAI is separately disabled with an explicitly blank `OPENAI_API_KEY` in the
+sanitized fixtures. No real or simulated provider connection or answer is used.
 
 ## Reproduce
 
@@ -38,6 +41,14 @@ Run from the repository root:
 ```sh
 node frontend/scripts/screenshots.mjs
 ```
+
+For 0.3.0, the script's unclipped-content check needs its operator
+`.op-message-list` selector scoped to `#panel-operator .op-message-list`, since
+Research keeps a second, hidden history mounted. This capture used a temporary
+Node loader to scope that assertion and verify the `v0.3` footer and three tabs;
+the repository script and UI were not edited. A temporary Python launcher also
+explicitly set `OPENAI_API_KEY=''` for the script's sanitized backend child.
+Use that assertion adjustment when repeating this capture with the current script.
 
 Portable defaults are `python3` and Playwright's installed Chromium. Override
 executable paths through the process environment when needed, for example with
@@ -74,17 +85,17 @@ ratio is 1; real fixture timestamps vary between runs.
 
 ## Real Stream Capture
 
-The stream image uses a separate, fresh native stack with **no paired wearers or
+The stream and Research images use a separate, fresh native stack with **no paired wearers or
 conversation records**. FFmpeg generates `testsrc2` video at 1280 x 720 / 30 fps
 and silent stereo AAC. `SYNTHETIC DEMO` is burned into the encoded frames with
 `drawtext`, not composited into the screenshot. The actual path is FFmpeg RTMP
--> MediaMTX 1.12.3 -> backend-authenticated fMP4 HLS -> Chromium's video decoder.
+-> MediaMTX 1.12.3 -> backend-authenticated low-latency fMP4 HLS -> Chromium's video decoder.
 Media buffers are memory-only; recording, STT, and AI are disabled. No camera,
 microphone, user media, or user conversations are used.
 
-The release capture verified `Playing live preview`, 1280 x 720 decoded video,
-73 decoded frames, `readyState = 4`, unpaused playback, and `currentTime`
-advancing from 0.436 to 2.321 seconds before capture. Source bitrate and publisher
+The release captures verified `Playing live preview`, 1280 x 720 decoded video,
+68 decoded frames for STREAM and 181 for RESEARCH, `readyState = 4`, unpaused
+playback, advancing `currentTime`, and low-latency HLS requests. Source bitrate and publisher
 time come from real backend polling, not mocked responses. Frame content,
 timestamps, and bitrate naturally vary. Encoder configuration remains collapsed;
 no operator password, token, stream key, or pairing code is visible.
@@ -112,7 +123,7 @@ on `PATH`. Run from the repository root, without shell tracing or debug logging.
    private directory. In MediaMTX, change the auth URL host to
    `127.0.0.1:28198` and bind `apiAddress`, `hlsAddress`, and `rtmpAddress` to
    `127.0.0.1:19997`, `127.0.0.1:18888`, and `127.0.0.1:21937` respectively.
-   Preserve HTTP media authentication, `overridePublisher: no`, `record: no`,
+   Preserve low-latency HLS, HTTP media authentication, `overridePublisher: no`, `record: no`,
    `hlsDirectory: ''`, and disabled unused protocols. Do not edit repo configs.
 
 For example, prepare the directory/password and check ports with:
@@ -144,7 +155,7 @@ stop these children and abort; never fall back to another origin.
 env -i PATH="$PATH" HOME="$HOME" PYTHONDONTWRITEBYTECODE=1 \
   ADMIN_PASSWORD="$ADMIN_PASSWORD" DATABASE_PATH="$CAPTURE_DIR/data.sqlite3" \
   MODEL_CACHE="$CAPTURE_DIR/models" FRONTEND_DIST="$PWD/frontend/dist" \
-  STT_ENABLED=false OLLAMA_URL='' OLLAMA_MODEL='' ALLOWED_ORIGINS='' \
+  STT_ENABLED=false OLLAMA_URL='' OLLAMA_MODEL='' OPENAI_API_KEY='' ALLOWED_ORIGINS='' \
   STREAM_ENABLED=true COOKIE_SECURE=false PUBLIC_HOST=localhost RTMP_PORT=21937 \
   MEDIA_API_URL=http://127.0.0.1:19997 MEDIA_HLS_URL=http://127.0.0.1:18888 \
   python3 -B -m uvicorn backend.main:app --host 127.0.0.1 --port 28198 \
@@ -187,7 +198,7 @@ os.execvp('ffmpeg', ['ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'error',
     '-vf', 'drawtext=text=SYNTHETIC DEMO:fontcolor=white:fontsize=56:box=1:boxcolor=black@0.8:boxborderw=18:x=(w-tw)/2:y=(h-th)/2',
     '-c:v', 'libx264', '-threads', '2', '-preset', 'ultrafast', '-tune', 'zerolatency',
     '-pix_fmt', 'yuv420p', '-g', '30', '-keyint_min', '30', '-sc_threshold', '0',
-    '-b:v', '2500k', '-c:a', 'aac', '-b:a', '128k', '-f', 'flv',
+    '-b:v', '2500k', '-c:a', 'aac', '-b:a', '128k', '-t', '110', '-f', 'flv',
     'rtmp://127.0.0.1:21937/live/' + settings['stream_key']])
 PY
 encoder_pid=$!
@@ -203,7 +214,8 @@ or any other existing service for gallery captures.
 
 Use a fresh Chromium context, 1440 x 1000 viewport, device scale 1, `en-US`, UTC,
 dark color scheme, reduced motion, and blocked service workers. Restrict all HTTP
-traffic to `http://127.0.0.1:28197`; block unexpected WebSockets. Log in with the
+traffic to `http://127.0.0.1:28197`; block unexpected WebSockets and all Research
+connection, model and chat requests. Log in with the
 fixture password and select the real STREAM tab. Do not reveal encoder settings,
 intercept responses, change UI copy/styles, freeze polling, or substitute media.
 
@@ -223,6 +235,7 @@ expect(await video.evaluate(v => !v.paused && v.readyState >= 2 &&
   v.getVideoPlaybackQuality().totalVideoFrames > 0)).toBe(true);
 await expect(page.getByText('CONTROL ROOM /', { exact: true })).toBeVisible();
 await expect(page.getByRole('tab', { name: 'OPERATOR', exact: true })).toBeVisible();
+await expect(page.getByRole('tab', { name: 'RESEARCH', exact: true })).toBeVisible();
 await expect(page.getByRole('tab', { name: 'STREAM', exact: true }))
   .toHaveAttribute('aria-selected', 'true');
 await expect(page.getByRole('heading', { name: 'Super Secret Comms Platform' })).toBeVisible();
@@ -238,10 +251,23 @@ await page.screenshot({ path: 'assets/screenshot-stream.png', fullPage: true,
 ```
 
 Also check for no visible credentials, horizontal overflow, runtime errors, or
-unexpected network requests, and confirm the charcoal/amber theme and `v0.2`
+unexpected network requests, and confirm the charcoal/amber theme and `v0.3`
 footer. Inspect the resulting PNG for the burned-in label and complete page.
 Use `page.screenshot({ fullPage: true })`, not the panel-only screenshot option
 in `frontend/scripts/check-stream.mjs`, which omits the heading and tabs.
+
+For Research, select the real RESEARCH tab and wait for live decoding and
+`Not configured`. Leave the API key blank and model unselected. Zoom in once
+(150%), click **Capture frame**, and type **What is visible in this captured frame?**
+without submitting. Capture the full page with Send disabled and an empty chat
+history. This run produced a native 856 x 480 JPEG crop of 37,429 bytes, below
+1280 pixels and 1 MiB. The same video element/source kept advancing, with zero
+pause, emptied or loadstart events during capture. Observed requests:
+`/research/chat` **0**, `/research/models` **0**, `/research/connection` **0**,
+external browser requests **0**. No OpenAI requests were made. This screenshot
+demonstrates an optional-key feature and a **local draft only**, not cloud/provider
+verification. Do not use the connected-provider mocks in `check-research.mjs`
+for gallery assets. No settings credentials, API keys or fabricated answers appear.
 
 Always close the owned browser in `finally`. Stop and wait for only the saved
 encoder, nginx, media, and backend PIDs, including on failure:
@@ -256,4 +282,4 @@ Verify the five ports are released. A recent shutdown can leave TCP `TIME_WAIT`
 sockets that make a strict bind probe refuse a quick retry; wait rather than
 reusing or terminating another process. Discard only the owned temporary
 directory after shutdown. Do not publish its database, logs, browser storage,
-traces, or credentials. Only the three synthetic PNGs belong in the gallery.
+traces, or credentials. Only the four synthetic PNGs belong in the gallery.

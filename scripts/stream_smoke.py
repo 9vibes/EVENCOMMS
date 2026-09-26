@@ -75,7 +75,7 @@ class API:
 
 
 class Publisher:
-    def __init__(self, url):
+    def __init__(self, url, duration=120):
         self.errors = deque(maxlen=8)
         self.process = subprocess.Popen([
             "ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error",
@@ -83,7 +83,7 @@ class Publisher:
             "-re", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000",
             "-map", "0:v:0", "-map", "1:a:0", "-c:v", "libx264",
             "-pix_fmt", "yuv420p", "-profile:v", "baseline", "-preset", "ultrafast",
-            "-tune", "zerolatency", "-g", "25", "-c:a", "aac", "-t", "120",
+            "-tune", "zerolatency", "-g", "25", "-c:a", "aac", "-t", str(duration),
             "-f", "flv", url,
         ], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
             env={key: value for key, value in os.environ.items()
@@ -92,7 +92,7 @@ class Publisher:
         # private buffer, never print it or a CalledProcessError/TimeoutExpired.
         self.reader = threading.Thread(target=self.drain, daemon=True)
         self.reader.start()
-        self.watchdog = threading.Timer(125, self.kill)
+        self.watchdog = threading.Timer(duration + 5, self.kill)
         self.watchdog.daemon = True
         self.watchdog.start()
 
@@ -187,6 +187,33 @@ def check_hls(api, cookie):
         raise SmokeFailure("HLS child did not contain initialization and media within 30 seconds")
     init_path = media_path(child, init.group(1))
     media = media_path(child, segments[-1])
+    part_target = re.search(r'#EXT-X-PART-INF:PART-TARGET=([0-9.]+)', playlist)
+    target = re.search(r'#EXT-X-TARGETDURATION:([0-9]+)', playlist)
+    require(part_target and target and 0 < float(part_target.group(1)) < float(target.group(1)),
+            "Expected low-latency partial segments shorter than a whole segment")
+    require('CAN-BLOCK-RELOAD=YES' in playlist, "Low-latency blocking reload was not advertised")
+    parts = re.findall(r'#EXT-X-PART:[^\n]*URI="([^"]+)"', playlist)
+    require(parts, "Low-latency playlist did not contain parts")
+    part_path = media_path(child, parts[-1])
+    api.request(part_path, expected=401)
+    part_headers, part_bytes = fetch(part_path)
+    require("mp4" in part_headers.get_content_type() and b"moof" in part_bytes and b"mdat" in part_bytes,
+            "Expected authenticated fMP4 part bytes")
+    # Request the next advertised position, exercising query forwarding and blocking reload.
+    sequence = re.search(r'#EXT-X-MEDIA-SEQUENCE:([0-9]+)', playlist)
+    require(sequence, "Media sequence is missing")
+    msn, part_index = int(sequence.group(1)), 0
+    for line in playlist.splitlines():
+        if line.startswith('#EXT-X-PART:'):
+            part_index += 1
+        elif line and not line.startswith('#'):
+            msn += 1
+            part_index = 0
+    query = urllib.parse.urlencode({'_HLS_msn': msn, '_HLS_part': part_index, '_HLS_skip': 'YES'})
+    api.request(child + '?' + query, expected=401)
+    _, _, reloaded = api.request(child + '?' + query, cookie=cookie, deadline=deadline)
+    require(reloaded.startswith(b'#EXTM3U') and b'#EXT-X-PART-INF:' in reloaded,
+            "Authenticated low-latency playlist reload failed")
     for path, boxes in [(init_path, (b"ftyp", b"moov")), (media, (b"moof", b"mdat"))]:
         headers, raw = fetch(path)
         require("mp4" in headers.get_content_type() and all(box in raw for box in boxes),
@@ -216,7 +243,9 @@ def main():
     parser.add_argument("--rtmp-host", default="127.0.0.1", help="Encoder destination, not advertised PUBLIC_HOST")
     parser.add_argument("--rtmp-port", type=int, default=21936)
     parser.add_argument("--browser", action="store_true", help="Also run real Chromium playback checks")
+    parser.add_argument("--research", action="store_true", help="After --browser, test real Research captures with browser-only provider stubs")
     args = parser.parse_args()
+    require(not args.research or args.browser, "--research requires --browser")
     base = urllib.parse.urlsplit(args.base_url)
     require(base.scheme in {"http", "https"} and base.hostname and base.port != 0
             and not base.username and not base.password and base.path in {"", "/"}
@@ -293,26 +322,28 @@ def main():
                 "Refusing to publish: source became online during wrong-key test")
 
         stage = "synthetic RTMP and authenticated HLS"
-        publisher = Publisher(destination + key)
+        publisher = Publisher(destination + key, duration=240 if args.research else 120)
         status = wait_status(api, observer, True, publisher)
         online_session = status.get("publisher_session_id")
         require(online_session and "H264" in status.get("tracks", [])
                 and any(track in status["tracks"] for track in ("MPEG4Audio", "MPEG-4 Audio")),
                 "Publisher status does not report the expected H.264/AAC feed")
         check_hls(api, cookie)
-        print("RTMP rejection, H.264/AAC ingest, authentication and real fMP4 HLS passed.")
+        print("RTMP rejection, H.264/AAC ingest, authenticated LL-HLS parts and blocking reload passed.")
 
-        if args.browser:
-            stage = "real browser playback"
-            script = Path(__file__).resolve().parents[1] / "frontend/scripts/check-stream.mjs"
+        browser_checks = ["stream", "research"] if args.research else ["stream"] if args.browser else []
+        for check in browser_checks:
+            stage = f"real browser {check}"
+            script = Path(__file__).resolve().parents[1] / f"frontend/scripts/check-{check}.mjs"
             # Only environment carries browser login credentials; suppress debug
             # output that could otherwise include HTTP headers or browser commands.
             env = {**os.environ, "STREAM_TEST_URL": api.base, "ADMIN_PASSWORD": password,
                    "DEBUG": "", "PWDEBUG": "0"}
             browser = subprocess.Popen(["node", str(script)], env=env, start_new_session=True,
-                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
             try:
-                result = browser.wait(timeout=85)
+                _, diagnostics = browser.communicate(timeout=90 if check == "research" else 85)
+                result = browser.returncode
             finally:
                 if browser.poll() is None:
                     browser.terminate()
@@ -321,8 +352,18 @@ def main():
                     except subprocess.TimeoutExpired:
                         os.killpg(browser.pid, signal.SIGKILL)
                         browser.wait(timeout=3)
-            require(result == 0, "Real browser smoke failed (run check-stream.mjs directly for its safe stage label)")
-            print("Real Chromium playback, responsive layout, cookie recovery and tab lifecycle passed.")
+                browser.stderr.close()
+            # Only our fixed, credential-free stage label may escape the child.
+            if result != 0 and re.fullmatch(
+                rb"(?:Stream|Research) browser smoke failed during [A-Za-z0-9 /,;-]{1,160}; private diagnostics suppressed\.\n",
+                diagnostics,
+            ):
+                print(diagnostics.decode("ascii").strip(), file=sys.stderr)
+            require(result == 0, f"Real browser {check} smoke failed (run check-{check}.mjs directly for its safe stage label)")
+            if check == "stream":
+                print("Real Chromium playback, responsive layout, cookie recovery and tab lifecycle passed.")
+            else:
+                print("Real Research JPEG capture/cropping, drafts, synthetic chat, limits and New chat race passed.")
 
         stage = "logout and publisher independence"
         _, headers, _ = api.request("/api/logout", method="POST", token=operator, cookie=cookie, expected=204)

@@ -3,24 +3,41 @@ id: kunas-evencomms
 name: EVENCOMMS
 tagline: Local conversations between Even glasses and an operator
 category: social
-version: "0.2.1"
+version: "0.3.0"
 port: 28097
 description: >-
-  STAGING PACKAGE ONLY. Requires building evencomms:0.2.1 from source;
+  STAGING PACKAGE ONLY. Requires building evencomms:0.3.0 from source;
   use KNS-Umbrel for the digest-pinned installable release package.
   Pair an Even Hub client with a
   browser operator, transcribe short English utterances locally on CPU,
   and optionally draft replies with an existing local Ollama server.
   AI replies require operator approval. A reachable HTTPS origin and
   explicit origin configuration are required for phone deployment.
-  An operator STREAM tab previews one authenticated RTMP feed over HLS,
-  without recording or transcoding. Plaintext RTMP is for trusted LAN/VPN use only.
+  An operator STREAM tab previews one authenticated RTMP feed over Low-Latency
+  HLS with 200 ms parts and a one-second browser live-sync target, not a latency
+  guarantee. Digital zoom/pan is 1x to 4x, not camera PTZ. No recording or
+  transcoding. Plaintext RTMP is for trusted LAN/VPN use only.
+  Optional RESEARCH uses your own OpenAI API key and account-provided model IDs;
+  availability does not guarantee Responses or vision compatibility. Connect a
+  sign-in-only key in the HTTPS UI or use a private shared server environment,
+  never a plain manifest key field. Explicit Send submits displayed chat history
+  and selected video-pixel JPEG stills, not continuous video/audio or UI controls.
+  No automatic wearer replies or web-search tools. OpenAI API use is billable;
+  store: false is not a zero-retention guarantee. Nonsecret defaults are
+  OPENAI_TIMEOUT=90 seconds and OPENAI_MAX_OUTPUT_TOKENS=2048.
 developer: EVENCOMMS contributors
 dependencies: []
 defaultUsername: ""
 deterministicPassword: true
 releaseNotes: >-
-  0.2.1 STREAM staging. Rebuild/redeploy all services; initialization installs
-  bundled nginx and MediaMTX configs automatically. Preserve the existing data
-  directory when updating. The KNS-Umbrel package supplies the published image
-  digest. Physical glasses and target-host acceptance testing remain necessary.
+  0.3.0 staging adds Research chat, explicit still-frame captures, digital zoom/pan
+  and LL-HLS. Rebuild/redeploy all services; initialization installs bundled nginx
+  and MediaMTX configs automatically. Update in place, preserving app ID,
+  web port 28097, RTMP port 21936, password, user data, model cache and stream secrets.
+  Sign-in keys are server-RAM-only and clear on logout, expiry, explicit Research
+  disconnect or restart; chat history is browser-RAM-only and clears on reload,
+  sign-out or New chat. Wearer voice and human-approved replies are unchanged.
+  Use the canonical KNS-Umbrel package for a published, digest-pinned installation.
+  OpenAI tests use MockTransport/browser stubs, not live provider verification.
+  Native Safari LL-HLS, physical glasses/phones and target-host acceptance remain
+  unverified; deployed browser access requires TLS.

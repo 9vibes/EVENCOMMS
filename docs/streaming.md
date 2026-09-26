@@ -1,15 +1,70 @@
-# Live Stream (0.2.1)
+# Live Stream (0.3.0)
 
 One RTMP publisher feeds MediaMTX at `live/stream`; operator browsers use an
-authenticated same-origin HLS proxy. No recording, transcoding or analysis.
+authenticated same-origin HLS proxy. No recording, transcoding or automatic
+analysis. Optional [Research](research.md) sends only explicitly selected stills
+and displayed chat history to OpenAI, never the live stream.
 The original conversation API and wearer client remain unchanged.
 
-Version `0.1.0` does **not** contain STREAM. Update to `0.2.1` and redeploy **all
+Version `0.1.0` does **not** contain STREAM. Update to `0.3.0` and redeploy **all
 services**, including the new public `web` proxy and MediaMTX. Back up the app,
 then update it in place rather than uninstalling: existing conversations,
 pairings, application password and model cache remain in place. The store's init
 service installs the bundled nginx/MediaMTX configuration automatically. Do not
 run the new topology against the old image.
+
+## Low-Latency HLS (0.3.0)
+
+Version `0.3.0` uses Low-Latency HLS, with 200 ms partial segments and a one-second
+browser live-sync target. The historical `0.2.1` image uses ordinary fMP4 HLS;
+upgrading requires a 0.3.0 image and full-stack redeployment, including managed
+media/proxy configs. Frontend settings alone cannot make a server emit partial
+segments. Publication status is tracked in the root README; this guide does not
+claim that the 0.3.0 publisher artifact or store update is already available.
+
+- MediaMTX: `hlsVariant: lowLatency`, `hlsPartDuration: 200ms`, one-second target
+  segments. The seven-segment window is retention, not seven seconds of delay.
+- HLS.js: `liveSyncDuration: 1`, `liveMaxLatencyDuration: 3`, and at most `1.05x`
+  catch-up playback. A lagging player may skip buffered content to return to live;
+  this is a live monitor, not a DVR. Manual pause does not resume automatically.
+- The backend forwards available bytes without waiting to aggregate a 64 KiB
+  chunk. Cookie authentication, request validation, size/time limits and response
+  cleanup also apply to every part and blocking playlist reload.
+- HTTPS is required for deployed browser access, especially native Apple LL-HLS;
+  isolated localhost HTTP smoke tests do not validate that deployment path.
+  Internal MediaMTX traffic can remain HTTP. Prefer HTTP/2 at the external TLS
+  proxy and disable caching/buffering there. Native HLS manages its own buffering;
+  HLS.js settings do not control Safari's native player.
+
+Smaller parts increase HTTP/authentication traffic and reduce tolerance for
+network jitter. The one-second target deliberately keeps more headroom than the
+server's most aggressive part hold-back. Encoder delay, GOP length, network load,
+and browser behavior can still increase actual latency.
+
+### Synthetic Comparison
+
+An isolated local RTMP -> MediaMTX 1.12.3 -> authenticated backend/nginx -> Chromium
+test used generated 640 x 360 H.264/AAC at 25 fps, one-second keyframes and FFmpeg's
+zero-latency encoder tune. Each result used 60 samples over 30 seconds after a
+10-second playback warm-up; no camera, user footage or production server was used.
+
+| Configuration | Median server-timestamp age | 95th percentile | Observed stalls |
+| --- | --- | --- | --- |
+| Historical 0.2.1 fMP4 profile | 2.048 s | 2.056 s | 0 |
+| LL-HLS, default player target | 0.797 s | 0.805 s | 0 |
+| LL-HLS, selected one-second target and catch-up | 1.226 s | 1.245 s | 0 |
+
+The selected profile was approximately 40% faster in this short local sample,
+while retaining jitter headroom and bounded drift. Measurements used the actual
+player's `playingDate` (server program timestamps) against the browser clock,
+inspected through Chromium's debugging protocol without changing playback.
+This is **not glass-to-glass (camera-to-display) latency**, a production guarantee,
+or a long-run stability benchmark. The authenticated LL-HLS smoke also verified real MP4 parts,
+blocking reload, cookie recovery, manual pause and tab lifecycle.
+These are the recorded local comparison results, not a new 0.3.0 release test run.
+The shared `scripts/stream_smoke.py` runner exercises real LL-HLS in standalone
+and managed-config CI stacks. Native Safari LL-HLS remains untested; verify it
+over the actual HTTPS deployment before relying on Apple playback.
 
 ## API
 
@@ -57,7 +112,9 @@ original Host (`$http_host`), cookies and mapped WebSocket Upgrade headers. It
 returns 404 for exact `/internal` and prefix `/internal/` for **all methods**.
 Never publish backend `8000` or point another public proxy directly at it.
 
-Nginx has a 1 MiB request-body limit, 180-second read/send timeouts, a five-second
+Nginx has a 9 MiB request-body ceiling to accommodate bounded Research JPEG history;
+ordinary JSON and PCM routes retain their smaller backend limits. It has
+180-second read/send timeouts, a five-second
 connect timeout, no request/response buffering and no access log. Docker DNS is
 refreshed so a replaced backend can receive new requests without recreating nginx.
 It runs as `101:101` with a read-only
@@ -122,7 +179,7 @@ Do not substitute browser URLs or publish these ports to fix connectivity.
 
 Use [the staging instructions](../deploy/umbrel/README.md) for local development,
 or the digest-pinned KNS-Umbrel package for installation. Local builds use
-`evencomms:0.2.1`. The init service copies the image's bundled `infra/` files into
+`evencomms:0.3.0`. The init service copies the image's bundled `infra/` files into
 `${APP_DATA_DIR}/config` at startup. Both consumers mount the whole directory
 read-only and wait for initialization through the backend health dependency.
 No manual copying, platform template expansion or nginx entrypoint rendering is
@@ -159,13 +216,15 @@ private Docker service names are not normally resolvable from a host process.
 4. Start streaming. One publisher is accepted at `live/stream`; a second cannot
    replace an active publisher (`overridePublisher: no`). Stop the old encoder
    before switching sources.
-5. Wait for **Source ready** and browser playback. HLS uses in-memory fMP4,
-   seven approximately one-second segments; keyframe cadence can lengthen them.
-   Expect **seconds of latency**, not real-time/WebRTC latency. Autoplay is muted;
+5. Wait for **Source ready** and browser playback. LL-HLS uses in-memory fMP4 parts
+   targeted at 200 ms, inside approximately one-second segments. Disable OBS's
+   intentional stream delay and select a low-delay encoder preset where available.
+   Longer keyframe intervals can increase startup and recovery delay. Actual
+   latency depends on the complete pipeline; this is not WebRTC. Autoplay is muted;
    use manual Play if blocked, then enable audio/fullscreen as needed.
 
 Stopping the encoder ends ingest. Leaving STREAM stops browser playback and
-polling, not OBS. No recording, stored video, transcoding or stream analysis is
+polling, not OBS. No recording, stored video, transcoding or automatic stream analysis is
 provided. `hlsDirectory: ''` retains the short HLS window in memory only.
 
 ## Security And Recovery
@@ -224,8 +283,22 @@ availability, container-image runtime compatibility or end-to-end media behavior
 
 ## Browser Behavior
 
-OPERATOR / STREAM are accessible top-level tabs. Switching retains the operator
-draft and conversation selection but stops browser media requests when leaving
-STREAM. It never stops the encoder. HLS.js handles MSE, native HLS is the fallback;
+OPERATOR / STREAM / RESEARCH are accessible top-level tabs. Switching retains the
+operator draft and conversation selection. Leaving a video tab stops its player
+and polling; entering RESEARCH starts its own compact preview. It never stops
+the encoder. HLS.js handles MSE, native HLS is the fallback;
 muted autoplay, manual play, offline/reconnect/error states and fullscreen controls
 are available. The live view fills the main content width, not a sidebar column.
+
+The 0.3.0 player supports **1x to 4x digital zoom**. Use Zoom in/Zoom out,
+then drag the image or focus it and use the arrow keys to pan. Reset view returns
+to the complete image. Zoom changes only client-side presentation, not the encoder
+or stream connection, and cannot add detail beyond the source resolution.
+It is not camera PTZ or optical zoom and adds no Python/GPIO camera controls.
+The zoom controls do not change backend behavior, language or the wearer layout.
+When zoomed, play/pause and mute controls remain outside the cropped image.
+The Fullscreen button expands the player and its zoom controls where the browser
+supports container fullscreen. New publishers reset the view; a same-publisher
+reconnect retains it. Research captures use this zoom/pan viewport, drawing only
+video pixels (not UI/native controls) into a bounded JPEG for explicit review
+and Send. The original wearer voice and reply workflow remains unchanged.

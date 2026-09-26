@@ -311,7 +311,19 @@ body:has(> #root > .operator-app) { margin: 0; }
 .operator-app .op-stream-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 14px; }
 .operator-app .op-stream-heading h2 { font-size: 16px; font-weight: 600; }
 .operator-app .op-live-frame { position: relative; aspect-ratio: 16 / 9; width: 100%; background: var(--comms-deep); border: 1px solid var(--op-line); border-radius: 8px; overflow: hidden; }
-.operator-app .op-live-frame video { display: block; width: 100%; height: 100%; object-fit: contain; }
+.operator-app .op-live-frame video { display: block; width: 100%; height: 100%; object-fit: contain; transform-origin: center; }
+.operator-app .op-live-player { min-width: 0; }
+.operator-app .op-live-player .op-button { min-width: 44px; min-height: 44px; }
+.operator-app .op-live-pan { position: absolute; inset: 0; touch-action: none; cursor: grab; user-select: none; }
+.operator-app .op-live-pan:active { cursor: grabbing; }
+.operator-app .op-live-pan:focus-visible { outline-offset: -4px; }
+.operator-app .op-live-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 12px 0; }
+.operator-app .op-live-zoom-level { min-width: 48px; text-align: center; font: 12px var(--op-mono); }
+.operator-app .op-live-hint { color: var(--op-muted); font-size: 12px; padding-bottom: 8px; overflow-wrap: anywhere; }
+.operator-app .op-live-hint.op-error-text { color: var(--comms-error); }
+.operator-app .op-live-player:fullscreen { display: flex; flex-direction: column; width: 100%; height: 100%; padding: 12px; background: var(--op-paper); overflow: auto; }
+.operator-app .op-live-player:fullscreen .op-live-frame { flex: 1 1 0; min-height: 80px; aspect-ratio: auto; }
+.operator-app .op-live-player:fullscreen > :not(.op-live-frame) { flex-shrink: 0; }
 .operator-app .op-live-standby { position: absolute; inset: 0 0 44px; display: flex; justify-content: center; align-items: center; gap: 12px; pointer-events: none; color: var(--op-muted); font: 10px var(--op-mono); letter-spacing: .16em; }
 .operator-app .op-live-caption { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 0; min-height: 52px; font-size: 12px; color: var(--op-muted); }
 .operator-app .op-stream-telemetry { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0 0 12px; border-block: 1px solid var(--op-line); }
@@ -332,4 +344,42 @@ body:has(> #root > .operator-app) { margin: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
   .operator-app *, .operator-app *::before, .operator-app *::after { transition: none !important; scroll-behavior: auto !important; }
+}
+.operator-app .op-research { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(360px, 1fr); gap: 20px; margin-top: 28px; align-items: start; }
+.operator-app .op-research-chat, .operator-app .op-research-sidebar { min-width: 0; }
+.operator-app .op-research-sidebar { display: grid; gap: 18px; }
+.operator-app .op-research-history { height: clamp(320px, 48vh, 620px); padding: 22px; overflow: auto; overscroll-behavior: contain; scrollbar-color: var(--comms-control-hover) transparent; }
+.operator-app .op-research .op-message { min-width: 0; width: 94%; }
+.operator-app .op-research .op-message > p { max-height: 420px; overflow-y: auto; }
+.operator-app .op-research .op-message-meta { overflow-wrap: anywhere; }
+.operator-app .op-research .op-composer > .op-fine-print, .operator-app .op-research .op-composer > .op-error-text { margin-top: 10px; }
+.operator-app .op-research .op-error-banner { margin-top: 12px; }
+.operator-app .op-research .op-composer-toolbar { flex-wrap: wrap; }
+.operator-app .op-research-frames { display: flex; flex-wrap: wrap; gap: 10px; }
+.operator-app .op-research-frames figure { flex: 0 1 145px; min-width: 0; margin: 12px 0; padding: 8px; border: 1px solid var(--op-line); border-radius: 5px; background: var(--comms-inset); }
+.operator-app .op-research-frames img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: contain; background: var(--comms-deep); }
+.operator-app .op-research-frames figcaption { display: grid; gap: 4px; font: 10px/1.6 var(--op-mono); color: var(--op-muted); margin-top: 8px; overflow-wrap: anywhere; }
+.operator-app .op-research-settings, .operator-app .op-research-preview, .operator-app .op-research-privacy { padding: 18px; overflow-wrap: anywhere; }
+.operator-app .op-research-settings fieldset { display: grid; gap: 12px; min-width: 0; padding: 0; border: 0; margin: 0; }
+.operator-app .op-research-settings legend { font-size: 15px; font-weight: 600; padding: 0 0 14px; }
+.operator-app .op-research-settings label { font-size: 12px; font-weight: 600; }
+.operator-app .op-research-settings input, .operator-app .op-research-settings select { display: block; min-width: 0; width: 100%; padding: 10px; background: var(--comms-inset); color: var(--op-ink); border: 1px solid var(--comms-control-line); border-radius: 4px; font: 12px var(--op-mono); }
+.operator-app .op-research-settings select { text-overflow: ellipsis; }
+.operator-app .op-research-settings .op-text-button { justify-self: start; }
+.operator-app .op-research-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.operator-app .op-research-preview .op-stream { margin-top: 0; }
+.operator-app .op-research-preview .op-stream-heading { flex-wrap: wrap; }
+.operator-app .op-research-preview .op-stream-telemetry { grid-template-columns: 1fr 1fr; gap: 0 12px; }
+.operator-app .op-research-preview .op-stream-telemetry > div:last-child { grid-column: 1 / -1; }
+.operator-app .op-research-privacy h3 { color: var(--op-acid); font-size: 13px; font-weight: 500; }
+.operator-app .op-research-privacy p { color: var(--op-muted); font-size: 12px; line-height: 1.8; margin-top: 10px; }
+@media (max-width: 960px) {
+  .operator-app .op-research { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 480px) {
+  .operator-app .op-tabs { gap: 2px; }
+  .operator-app .op-tabs button > span { margin-right: 6px; }
+  .operator-app .op-research-history { padding: 18px 14px; }
+  .operator-app .op-research-settings input, .operator-app .op-research-settings select { font-size: 16px; }
+  .operator-app .op-research-settings, .operator-app .op-research-preview, .operator-app .op-research-privacy { padding: 14px; }
 }

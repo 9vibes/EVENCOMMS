@@ -3,6 +3,7 @@ import type { FormEvent } from 'react';
 import { ApiError, characterCount, clientId, errorText, mergeMessages, request } from './api';
 import type { Message, ServiceStatus, Session } from './api';
 import StreamTab from './StreamTab';
+import ResearchTab from './ResearchTab';
 
 const TOKEN_KEY = 'evencomms.operator.token';
 const POLL_INTERVAL = 2000;
@@ -244,7 +245,7 @@ type Draft = { text: string; revision: number; attempt?: { text: string; id: str
 type Action = { kind: 'send' | 'suggest' | 'delete'; sessionId: string; controller: AbortController };
 
 function Console({ token, onLogout }: { token: string; onLogout: (expired?: boolean) => Promise<void> }) {
-  const [tab, setTab] = useState<'operator' | 'stream'>('operator');
+  const [tab, setTab] = useState<'operator' | 'stream' | 'research'>('operator');
   const [sessions, setSessions] = useState<Session[]>([]);
   const [sessionsLoaded, setSessionsLoaded] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -564,7 +565,7 @@ function Console({ token, onLogout }: { token: string; onLogout: (expired?: bool
             <div className="op-eyebrow op-console-navigation">
               <span>CONTROL ROOM /</span>
               <div role="tablist" aria-label="Control room" className="op-tabs">
-                {(['operator', 'stream'] as const).map((name, index) => (
+                {(['operator', 'stream', 'research'] as const).map((name, index) => (
                   <button
                     key={name}
                     id={`tab-${name}`}
@@ -574,22 +575,23 @@ function Console({ token, onLogout }: { token: string; onLogout: (expired?: bool
                     tabIndex={tab === name ? 0 : -1}
                     onClick={() => setTab(name)}
                     onKeyDown={(event) => {
-                      const next = event.key === 'Home' ? 0 : event.key === 'End' ? 1
-                        : event.key === 'ArrowRight' || event.key === 'ArrowLeft' ? 1 - index : null;
+                      const next = event.key === 'Home' ? 0 : event.key === 'End' ? 2
+                        : event.key === 'ArrowRight' ? (index + 1) % 3
+                        : event.key === 'ArrowLeft' ? (index + 2) % 3 : null;
                       if (next === null) return;
                       event.preventDefault();
-                      const name = next === 0 ? 'operator' : 'stream';
+                      const name = (['operator', 'stream', 'research'] as const)[next];
                       setTab(name);
                       document.getElementById(`tab-${name}`)?.focus();
                     }}
-                  >{index === 1 && <span aria-hidden="true">/</span>}{name.toUpperCase()}</button>
+                  >{index > 0 && <span aria-hidden="true">/</span>}{name.toUpperCase()}</button>
                 ))}
               </div>
             </div>
             <h1 id="console-title">
               Super Secret Comms Platform
             </h1>
-            <p>{tab === 'operator' ? 'A direct line to your wearer. Thoughtful replies, without the noise.' : 'One live source. A direct view, without recording or analysis.'}</p>
+            <p>{tab === 'operator' ? 'A direct line to your wearer. Thoughtful replies, without the noise.' : tab === 'stream' ? 'One live source. A direct view, without recording or analysis.' : 'A separate research space. Choose what you share with OpenAI.'}</p>
           </div>
           {tab === 'operator' && <button
             className="op-button op-button-acid"
@@ -603,6 +605,9 @@ function Console({ token, onLogout }: { token: string; onLogout: (expired?: bool
 
         <section id="panel-stream" role="tabpanel" aria-labelledby="tab-stream" hidden={tab !== 'stream'} tabIndex={0}>
           {tab === 'stream' && <StreamTab token={token} onUnauthorized={onUnauthorized} />}
+        </section>
+        <section id="panel-research" role="tabpanel" aria-labelledby="tab-research" hidden={tab !== 'research'} tabIndex={0}>
+          <ResearchTab token={token} onUnauthorized={onUnauthorized} active={tab === 'research'} />
         </section>
         <section id="panel-operator" role="tabpanel" aria-labelledby="tab-operator" hidden={tab !== 'operator'} tabIndex={0}>
         {tab === 'operator' && <>
@@ -1005,7 +1010,7 @@ function Footer() {
     <footer className="op-footer">
       <span>KUNAS / EVENCOMMS</span>
       <span>BUILT FOR PRESENCE. NOT DISTRACTION.</span>
-      <span>LOCAL COMMS / v0.2</span>
+      <span>LOCAL COMMS / v0.3</span>
     </footer>
   );
 }

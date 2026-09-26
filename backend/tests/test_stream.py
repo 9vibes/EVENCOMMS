@@ -298,9 +298,10 @@ def test_proxy_unknown_length_cap_and_midstream_failure(make_stream, monkeypatch
 
 
 @pytest.mark.parametrize("disconnect", [None, "start", "body"])
-def test_response_streams_incrementally_and_closes_on_disconnect(disconnect):
+@pytest.mark.parametrize("chunk_size", [128, 65536])
+def test_response_streams_incrementally_and_closes_on_disconnect(disconnect, chunk_size):
     async def run():
-        content = Chunks([b"x" * 65536] * 3)
+        content = Chunks([b"x" * chunk_size] * 3)
         upstream = httpx.Response(200, stream=content)
         response = MediaResponse(upstream)
         sent = 0

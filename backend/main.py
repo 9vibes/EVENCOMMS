@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, StrictStr, ValidationError, field_va
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .config import Settings
+from .research import Research, register_research_routes
 from .services import Transcriber, suggest
 from .store import Store
 from .stream import Stream, register_stream_routes
@@ -38,6 +39,7 @@ class Credentials:
         self.playbacks: dict[str, tuple[str, float]] = {}
         self.rates: dict[tuple[str, str], tuple[float, int]] = {}
         self.now = time.monotonic
+        self.prune_hooks = []
 
     def prune(self):
         now = self.now()
@@ -46,6 +48,8 @@ class Credentials:
         self.playbacks = {key: (parent, expiry) for key, (parent, expiry) in self.playbacks.items()
                           if expiry > now and self.operators.get(parent, 0) > now}
         self.rates = {key: value for key, value in self.rates.items() if value[0] > now}
+        for hook in self.prune_hooks:
+            hook()
 
     def throttle(self, route: str, request: Request):
         self.prune()
@@ -187,9 +191,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.transcriber = Transcriber(config)
         app.state.ollama = httpx.AsyncClient(timeout=httpx.Timeout(config.ollama_timeout), trust_env=False)
         app.state.stream = Stream(config, app.state.store)
+        app.state.research = Research(config, app.state.credentials)
         try:
             yield
         finally:
+            await app.state.research.aclose()
             for peer in list(app.state.peers.values()):
                 await close_socket(peer.socket, 1001)
             await app.state.ollama.aclose()
@@ -384,6 +390,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 app.state.peers.pop(session_id, None)
 
     register_stream_routes(app, operator, bearer, digest, body)
+    register_research_routes(app, operator, bearer, digest, body)
 
     @app.get("/{path:path}", include_in_schema=False)
     async def frontend(path: str):

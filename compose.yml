@@ -10,7 +10,7 @@ services:
   server:
     build:
       context: .
-    image: evencomms:0.2.1
+    image: evencomms:0.3.0
     pull_policy: never
     init: true
     restart: unless-stopped
@@ -25,6 +25,9 @@ services:
       OLLAMA_URL: ${OLLAMA_URL-http://host.docker.internal:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL-llama3.2:3b}
       OLLAMA_TIMEOUT: ${OLLAMA_TIMEOUT:-30}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_TIMEOUT: ${OPENAI_TIMEOUT:-90}
+      OPENAI_MAX_OUTPUT_TOKENS: ${OPENAI_MAX_OUTPUT_TOKENS:-2048}
       MAX_SESSIONS: ${MAX_SESSIONS:-100}
       MAX_MESSAGES_PER_SESSION: ${MAX_MESSAGES_PER_SESSION:-1000}
       STREAM_ENABLED: ${STREAM_ENABLED:-true}
