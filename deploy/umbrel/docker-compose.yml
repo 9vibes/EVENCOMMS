@@ -12,9 +12,7 @@ services:
     image: evencomms:0.1.0
     pull_policy: never
     user: "0:0"
-    entrypoint: ["/bin/sh", "-ec"]
-    command:
-      - mkdir -p /data/models && chown -R 10001:10001 /data && chmod 700 /data
+    command: [python, -m, backend.init_data]
     network_mode: none
     read_only: true
     restart: "no"
@@ -35,7 +33,7 @@ services:
         condition: service_completed_successfully
     environment:
       ADMIN_PASSWORD: ${APP_PASSWORD:?Umbrel must provide a nonempty APP_PASSWORD}
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://${DEVICE_DOMAIN_NAME:-umbrel.local}:28097}
       DATABASE_PATH: /data/evencomms.sqlite3
       MODEL_CACHE: /data/models
       STT_ENABLED: ${STT_ENABLED:-true}

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">EVENCOMMS</title>
+  <desc id="desc">Geometric smart glasses and a speech mark on a warm amber rounded tile.</desc>
+  <rect width="512" height="512" rx="104" fill="#eeb653"/>
+  <path d="M278 104h110a24 24 0 0 1 24 24v56a24 24 0 0 1-24 24h-62l-48 36V104Z" fill="#101210"/>
+  <path d="M307 139h74m-74 34h44" stroke="#eeb653" stroke-width="14"/>
+  <g stroke="#101210" stroke-width="24" stroke-linejoin="round">
+    <path d="m92 268 15 67a24 24 0 0 0 24 19h53a24 24 0 0 0 24-20l11-66H92Zm201 0 11 66a24 24 0 0 0 24 20h53a24 24 0 0 0 24-19l15-67H293Z"/>
+    <path d="M219 283c20-19 54-19 74 0M68 253l24 15m328 0 24-15"/>
+  </g>
+  <path d="M116 166h48m-24-24 24 24-24 24" stroke="#101210" stroke-width="16" stroke-linejoin="miter"/>
+</svg>

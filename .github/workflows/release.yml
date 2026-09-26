@@ -1,0 +1,169 @@
+name: Release Image
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Optional version without v; defaults to the tag or project version"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+# Serialize publication, including manual runs, without cancelling an in-flight push.
+concurrency:
+  group: evencomms-release
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: ci
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/9vibes/evencomms
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate release version
+        id: version
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import re
+          import tomllib
+          from pathlib import Path
+
+          project = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
+          versions = [project, *[
+              json.loads(Path(path).read_text())["version"]
+              for path in ("frontend/package.json", "frontend/app.json")
+          ]]
+          tag = os.environ["GITHUB_REF_NAME"] if os.environ["GITHUB_REF_TYPE"] == "tag" else ""
+          version = os.environ["REQUESTED_VERSION"] or (tag.removeprefix("v") if tag else project)
+          # SemVer without build metadata: '+' cannot occur in a Docker tag.
+          number = r"(?:0|[1-9][0-9]*)"
+          identifier = rf"(?:{number}|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)"
+          pattern = rf"{number}\.{number}\.{number}(?:-{identifier}(?:\.{identifier})*)?"
+          if not re.fullmatch(pattern, version) or len(version) > 128:
+              raise SystemExit("Expected a Docker-compatible semantic version (no v or build metadata)")
+          if any(value != version for value in versions):
+              raise SystemExit("Release, pyproject, frontend package, and app versions must match")
+          if tag and tag != "v" + version:
+              raise SystemExit("Source tag must be v followed by the exact release version")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"version={version}\n")
+          PY
+      - name: Build local amd64 release image
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          docker build --platform linux/amd64 \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.version=$VERSION" \
+            --tag evencomms:release .
+          docker image inspect --format '{{.Id}}' evencomms:release > "$RUNNER_TEMP/release-image-id"
+      - name: Generate real speech fixture
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends espeak ffmpeg
+          espeak -v en-us -s 135 -w "$RUNNER_TEMP/speech.wav" \
+            "Please meet me at the north entrance. I am waiting at the north entrance."
+          ffmpeg -hide_banner -loglevel error -y -i "$RUNNER_TEMP/speech.wav" \
+            -ar 16000 -ac 1 -c:a pcm_s16le -f s16le "$RUNNER_TEMP/speech.pcm"
+      - name: Smoke-test exact image with cold CPU STT and persistent cache
+        run: |
+          python scripts/container_smoke.py \
+            --image "$(cat "$RUNNER_TEMP/release-image-id")" \
+            --speech-pcm "$RUNNER_TEMP/speech.pcm"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Refuse replacement of an existing image tag
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python - <<'PY'
+          import base64
+          import json
+          import os
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          credentials = base64.b64encode(
+              f'{os.environ["GITHUB_ACTOR"]}:{os.environ["GH_TOKEN"]}'.encode()
+          ).decode()
+          query = urllib.parse.urlencode({"service": "ghcr.io", "scope": "repository:9vibes/evencomms:pull"})
+          request = urllib.request.Request("https://ghcr.io/token?" + query,
+              headers={"Authorization": "Basic " + credentials})
+          with urllib.request.urlopen(request, timeout=30) as response:
+              token = json.load(response)["token"]
+          request = urllib.request.Request(
+              f'https://{os.environ["IMAGE"]}/manifests/{os.environ["VERSION"]}'.replace(
+                  "ghcr.io/", "ghcr.io/v2/", 1),
+              headers={"Authorization": "Bearer " + token, "Accept": ", ".join([
+                  "application/vnd.oci.image.manifest.v1+json",
+                  "application/vnd.oci.image.index.v1+json",
+                  "application/vnd.docker.distribution.manifest.v2+json",
+                  "application/vnd.docker.distribution.manifest.list.v2+json",
+              ])})
+          try:
+              with urllib.request.urlopen(request, timeout=30):
+                  raise SystemExit("Release tag already exists; refusing to overwrite it")
+          except urllib.error.HTTPError as error:
+              # Only a registry-confirmed missing manifest is safe, not auth/network errors.
+              if error.code != 404:
+                  raise SystemExit(f"Registry check failed: HTTP {error.code}") from None
+              codes = {item["code"] for item in json.load(error).get("errors", [])}
+              if not codes or not codes <= {"MANIFEST_UNKNOWN", "NAME_UNKNOWN"}:
+                  raise SystemExit("Registry did not confirm that the release tag is absent")
+          PY
+      - name: Push the tested image and record repository digest
+        id: publish
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          docker tag "$(cat "$RUNNER_TEMP/release-image-id")" "$IMAGE:$VERSION"
+          docker push "$IMAGE:$VERSION"
+          docker image inspect "$IMAGE:$VERSION" --format '{{json .RepoDigests}}' | python -c '
+          import json, os, re, sys
+          from pathlib import Path
+          refs = [ref for ref in json.load(sys.stdin)
+                  if re.fullmatch(re.escape(os.environ["IMAGE"]) + r"@sha256:[0-9a-f]{64}", ref)]
+          if len(refs) != 1:
+              raise SystemExit("Expected exactly one published repository digest")
+          Path("image-reference.txt").write_text(refs[0] + "\n")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              image, version = os.environ["IMAGE"], os.environ["VERSION"]
+              summary.write(f"## Published Image\n\n`{image}:{version}`\n\n")
+              summary.write(f"`{refs[0]}`\n\nPlatform: **linux/amd64 only**.\n\n")
+              summary.write("The package may initially be private. A maintainer must set the GHCR "
+                            "package visibility to Public if needed, then verify an anonymous pull "
+                            "by digest before submitting the Umbrel store integration. "
+                            "Publication does not wait for public visibility.\n")
+          '
+      - name: Upload immutable image reference
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-reference
+          path: image-reference.txt
+          if-no-files-found: error

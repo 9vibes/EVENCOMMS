@@ -6,10 +6,11 @@ reply on the glasses. English speech transcription runs locally; an existing
 local Ollama server can suggest a reply, but **the operator must review and send
 it**. There is no cloud inference integration and no automatic AI reply.
 
-Version `0.1.0` is an initial implementation/staging target, not a claim of
-verified glasses hardware behavior or a published container. The Umbrel files
-are a [local staging package](deploy/umbrel/README.md), not an installable public
-store release. See [the protocol](docs/protocol.md) for API contracts.
+Version `0.1.0` is an early release. The installable Umbrel package is maintained
+in [KNS-Umbrel](https://github.com/9vibes/KNS-Umbrel/tree/master/kunas-evencomms).
+The files in `deploy/umbrel` remain local-development templates, not the store's
+digest-pinned release package. See [the protocol](docs/protocol.md) for API
+contracts. Physical G2/phone behavior still needs hardware acceptance testing.
 
 ## First-Version Interaction
 
@@ -27,6 +28,28 @@ These controls are implemented in the client. Validate the SDK's actual
 hold/release events and the pause/resume/exit behavior on supported glasses
 before relying on the app. Short local utterances produce transcription chunks;
 continuous, word-by-word partial updates are **not guaranteed**.
+
+## Umbrel Installation
+
+Add `https://github.com/9vibes/KNS-Umbrel` to Umbrel's community app stores, then
+install **EVENCOMMS** (`kunas-evencomms`). The initial published image targets
+Linux x86-64 (amd64), uses CPU speech recognition, and needs no NVIDIA runtime.
+ARM devices are not supported by this release image.
+
+Open the app on port `28097` and sign in with the generated application password
+shown by Umbrel; no username is required. The browser simulator works without
+glasses. The model is downloaded on first transcription, not during installation.
+Allow time for that download and keep the model cache for subsequent offline use.
+
+The package defaults to allowing `http://<device-domain>:28097` for WebSockets.
+If using an IP address, another hostname, or a trusted HTTPS proxy, configure the
+full browser origin in `ALLOWED_ORIGINS`. Include the packaged Even app's origin
+when it differs. Do not use wildcards. Manual replies work without Ollama; set a
+reachable `OLLAMA_URL` and installed `OLLAMA_MODEL` to enable AI suggestions.
+
+Read the [store setup guide](https://github.com/9vibes/KNS-Umbrel/blob/master/kunas-evencomms/README.md)
+for persistent storage, settings, TLS and phone packaging. Adding the package to
+the store is not the same as installing it on a particular Stone.
 
 ## Standalone Deployment
 
@@ -271,8 +294,10 @@ changing the normal server build. Never deploy an example-origin test package.
 
 The CI workflow checks backend tests, frontend tests/build, browser end-to-end
 tests, Even packaging, standalone Compose configuration and an image build/smoke
-test. It does not publish images, fetch
-speech models or verify glasses hardware. Before release, separately verify a
+test. CI does not fetch speech models or verify glasses hardware. The separate
+release workflow runs CI, builds an amd64 image, tests real CPU transcription
+with synthetic speech and persisted data/model cache, then publishes that exact
+image to GHCR. See [release checks](scripts/README.md). Before deployment, verify a
 real utterance, model cache reuse, pairing/reconnect, gesture ordering, deletion,
 TLS/CORS/network permissions, and an operator-approved AI reply on target
 hardware. Report the actual test results, not a fixed historical test count.
