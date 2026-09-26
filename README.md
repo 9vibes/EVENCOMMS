@@ -12,6 +12,14 @@ The files in `deploy/umbrel` remain local-development templates, not the store's
 digest-pinned release package. See [the protocol](docs/protocol.md) for API
 contracts. Physical G2/phone behavior still needs hardware acceptance testing.
 
+**STREAM is unreleased.** Current source adds an operator tab for one RTMP live
+feed, with authenticated HLS playback and no recording or transcoding. Released
+`0.1.0` lacks STREAM: using it requires rebuilding from current source and
+redeploying all services, not just replacing the frontend. The local build tag
+stays `evencomms:0.1.0`; this is not a new GHCR release. The published KNS-Umbrel
+package remains unchanged until a future tagged release. See the
+[stream deployment and OBS guide](docs/streaming.md).
+
 ## First-Version Interaction
 
 - The glasses screen switches between the unsent draft and latest operator reply,
@@ -57,17 +65,20 @@ Requirements: Docker Engine with Compose v2, a compatible CPU, disk/RAM for the
 selected speech model, and the complete frontend source plus its committed
 `package-lock.json`. The multi-stage image runs `npm ci` and `npm run build`
 under Node 24, then installs `pip install '.[stt]'` under Debian-based Python
-3.12 slim and serves `frontend/dist` with FastAPI. Alpine/musl is not used:
+3.12 slim and serves `frontend/dist` with FastAPI behind nginx. Alpine/musl is not
+used for the application image (nginx uses Alpine):
 CTranslate2's prebuilt wheels require a supported glibc platform.
 
 1. Create a local `.env` from `.env.example` and set a long, unique
    `ADMIN_PASSWORD`. The blank example is deliberate: Compose refuses to start
    without a nonempty password. Keep this file private and out of version control.
+   For a remote encoder, also set `PUBLIC_HOST` to the reachable LAN/VPN hostname
+   or IP (no scheme, port or path) and `RTMP_BIND` to the host's LAN/VPN IP.
 2. From this directory, build and start:
 
 ```sh
 docker compose build
-docker compose up -d
+docker compose up -d --force-recreate
 docker compose ps
 curl --fail http://127.0.0.1:28097/health
 ```
@@ -79,10 +90,13 @@ curl --fail http://127.0.0.1:28097/health
    real glasses audio.
 
 The locally built tag is `evencomms:0.1.0`; no registry pull is needed or claimed.
-The API binds port `8000` inside the container. The published host port is
+The API binds port `8000` inside the private network and is **never published**.
+The only HTTP entry is `web` nginx on container port `8080`, published as host
 `28097`, bound to loopback by default. For isolated LAN testing set
 `BIND_ADDRESS` to the host's LAN IP (or `0.0.0.0` to listen on all IPv4 interfaces)
-and recreate the service. Firewall it to trusted clients. Use TLS for phone use
+and recreate the services. RTMP has a separate loopback-default `RTMP_BIND` and
+TCP port `RTMP_PORT=21936`; HLS `8888` and media API `9997` stay unpublished.
+Firewall access to trusted clients. Use TLS for phone use
 and private conversations; plain HTTP exposes passwords and bearer tokens.
 
 The server runs as UID/GID `10001:10001`, with a read-only root filesystem and
@@ -111,8 +125,10 @@ comms.example.net {
 ```
 
 For a containerized proxy, connect it to the app's Docker network and proxy
-`server:8000` instead; the proxy's own loopback is not the host. Keep the backend
-unpublished or loopback-only and allow external access only through TLS.
+`web:8080` instead; the proxy's own loopback is not the host. Never target
+`server:8000`, including through Umbrel's `app_proxy`: that bypasses nginx's
+all-method blocks for exact `/internal` and the `/internal/` prefix. Keep the
+backend unpublished and allow external browser access only through TLS.
 Preserve Host, forward WebSocket Upgrade, and do not strip `/api` or other
 paths. Set proxy response timeouts above `STT_TIMEOUT` and `OLLAMA_TIMEOUT`;
 allow the 480000-byte audio request plus framing. Avoid logging credentials,
@@ -122,6 +138,7 @@ Set this in `.env` and recreate the service:
 
 ```dotenv
 ALLOWED_ORIGINS=https://comms.example.net
+COOKIE_SECURE=true
 ```
 
 **This is required even for a same-origin browser using HTTPS/WSS.** Uvicorn runs
@@ -175,6 +192,13 @@ deployment files alone do not provide them.
 | --- | --- | --- |
 | `ADMIN_PASSWORD` | Required | Operator login password; no default credential. |
 | `BIND_ADDRESS` | `127.0.0.1` | Standalone host interface for port 28097, not an API setting. |
+| `STREAM_ENABLED` | `true` in Compose; `false` bare backend | Enable the single RTMP feed and authenticated HLS playback. |
+| `PUBLIC_HOST` | `localhost`; Umbrel device domain in staging | Encoder-reachable LAN/VPN hostname or IP only, without scheme, port or path; must be set for remote ingest. |
+| `RTMP_BIND` | `127.0.0.1` standalone; `0.0.0.0` Umbrel staging | Host RTMP bind interface, independent of web `BIND_ADDRESS`; prefer a specific LAN/VPN IP. |
+| `RTMP_PORT` | `21936` | Published TCP ingest port and the port advertised to encoders; check host availability. |
+| `MEDIA_API_URL` | `http://mediamtx:9997` | Backend-only media API origin, fixed in Compose; never publish. |
+| `MEDIA_HLS_URL` | `http://mediamtx:8888` | Backend-only HLS origin, fixed in Compose; never publish. |
+| `COOKIE_SECURE` | `false` | Set `true` behind TLS for the HttpOnly playback cookie. |
 | `ALLOWED_ORIGINS` | Empty | Exact, comma-separated HTTP(S) browser/packaged app origins. |
 | `STT_ENABLED` | `true` | `true`/`false` or `1`/`0`; disable for text-only use. |
 | `STT_MODEL` | `base.en` | Faster Whisper model name or local model directory. |
@@ -250,6 +274,10 @@ SQLite/WAL remnants, host snapshots, backups, browser storage remnants and swap
 may retain data. Manage backup retention and host/disk encryption separately.
 Pending audio is not backed up and is lost on reload. Avoid recording bodies or
 tokens in infrastructure logs. Keep `.env`, app data and backups private.
+Stream publisher and reader secrets persist in the same database. The publisher
+key is revealed only on request in STREAM; playback uses a short-lived HttpOnly
+cookie. Neither secret rotation nor recording is implemented. See
+[stream security and recovery](docs/streaming.md#security-and-recovery).
 
 For a consistent filesystem backup, stop the server first, back up the entire
 `/data` volume (database plus sidecar files and optionally model cache), then
@@ -265,10 +293,14 @@ Node 24. For typed-only backend development, `pip install '.[test]'` plus
 `STT_ENABLED=false` avoids installing speech runtime dependencies. A local
 Uvicorn invocation must also use a single worker and the socket limits above.
 
-For a local development loop, run the backend on port 8000 with a configured
+For a local development loop, explicitly bind the backend to `127.0.0.1:8000`
+(`uvicorn backend.main:app --host 127.0.0.1 --port 8000`, with the single-worker
+socket/logging flags above) with a configured
 `ADMIN_PASSWORD`, then `npm run dev` from `frontend`. Vite proxies `/api` and
 WebSockets to that backend. Open `http://localhost:5173/` for the operator and
 `http://localhost:5173/glasses.html?simulate=1` for typed simulation.
+Vite does not proxy `/internal`; no additional nginx is needed for this local
+development loop. Do not expose a bare streaming backend on a LAN/public bind.
 
 Run repeatable browser tests against an isolated real backend:
 

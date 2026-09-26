@@ -1,4 +1,11 @@
 name: evencomms
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   server:
     build:
@@ -20,8 +27,13 @@ services:
       OLLAMA_TIMEOUT: ${OLLAMA_TIMEOUT:-30}
       MAX_SESSIONS: ${MAX_SESSIONS:-100}
       MAX_MESSAGES_PER_SESSION: ${MAX_MESSAGES_PER_SESSION:-1000}
-    ports:
-      - "${BIND_ADDRESS:-127.0.0.1}:28097:8000"
+      STREAM_ENABLED: ${STREAM_ENABLED:-true}
+      PUBLIC_HOST: ${PUBLIC_HOST:-localhost}
+      RTMP_PORT: ${RTMP_PORT:-21936}
+      MEDIA_API_URL: http://mediamtx:9997
+      MEDIA_HLS_URL: http://mediamtx:8888
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+    networks: [private]
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -33,6 +45,57 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+    logging: *logging
+
+  mediamtx:
+    image: bluenviron/mediamtx:1.12.3@sha256:3634a1eed1288b93e8d22ed74694eae96d483fcf676cac5d0c91830ad1b86b3d
+    entrypoint: [/mediamtx]
+    command: [/mediamtx.yml]
+    restart: unless-stopped
+    depends_on:
+      server:
+        condition: service_healthy
+    volumes:
+      - ./infra/mediamtx.yml:/mediamtx.yml:ro
+    ports:
+      - "${RTMP_BIND:-127.0.0.1}:${RTMP_PORT:-21936}:1935/tcp"
+    networks: [private]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+
+  web:
+    image: nginx:1.28-alpine@sha256:a8b39bd9cf0f83869a2162827a0caf6137ddf759d50a171451b335cecc87d236
+    user: "101:101"
+    entrypoint: [nginx]
+    command: [-g, "daemon off;"]
+    restart: unless-stopped
+    depends_on:
+      server:
+        condition: service_healthy
+    volumes:
+      - ./infra/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:28097:8080"
+    networks: [private]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: [CMD, wget, --spider, -q, http://127.0.0.1:8080/health]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    logging: *logging
+
+networks:
+  # Not internal:true: published RTMP must remain reachable by LAN/VPN encoders.
+  private:
+    driver: bridge
 
 volumes:
   data:

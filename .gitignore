@@ -17,3 +17,4 @@ data/
 *.ehpk
 playwright-report/
 test-results/
+.DS_Store

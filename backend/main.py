@@ -19,6 +19,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from .config import Settings
 from .services import Transcriber, suggest
 from .store import Store
+from .stream import Stream, register_stream_routes
 
 
 JSON_LIMIT = 65536
@@ -34,6 +35,7 @@ class Credentials:
     def __init__(self):
         self.operators: dict[str, float] = {}
         self.pairings: dict[str, float] = {}
+        self.playbacks: dict[str, tuple[str, float]] = {}
         self.rates: dict[tuple[str, str], tuple[float, int]] = {}
         self.now = time.monotonic
 
@@ -41,6 +43,8 @@ class Credentials:
         now = self.now()
         self.operators = {key: expiry for key, expiry in self.operators.items() if expiry > now}
         self.pairings = {key: expiry for key, expiry in self.pairings.items() if expiry > now}
+        self.playbacks = {key: (parent, expiry) for key, (parent, expiry) in self.playbacks.items()
+                          if expiry > now and self.operators.get(parent, 0) > now}
         self.rates = {key: value for key, value in self.rates.items() if value[0] > now}
 
     def throttle(self, route: str, request: Request):
@@ -132,6 +136,7 @@ def bearer(request: Request) -> str:
 
 async def operator(request: Request):
     credentials = request.app.state.credentials
+    credentials.prune()
     token_hash = digest(bearer(request))
     if credentials.operators.get(token_hash, 0) <= credentials.now():
         raise HTTPException(401, "Invalid or expired operator token")
@@ -181,12 +186,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.peers = {}
         app.state.transcriber = Transcriber(config)
         app.state.ollama = httpx.AsyncClient(timeout=httpx.Timeout(config.ollama_timeout), trust_env=False)
+        app.state.stream = Stream(config, app.state.store)
         try:
             yield
         finally:
             for peer in list(app.state.peers.values()):
                 await close_socket(peer.socket, 1001)
             await app.state.ollama.aclose()
+            await app.state.stream.aclose()
             app.state.store.db.close()
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
@@ -376,9 +383,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if session_id and app.state.peers.get(session_id) is peer:
                 app.state.peers.pop(session_id, None)
 
+    register_stream_routes(app, operator, bearer, digest, body)
+
     @app.get("/{path:path}", include_in_schema=False)
     async def frontend(path: str):
-        if path == "api" or path.startswith("api/") or path == "health":
+        if path in {"api", "internal", "health"} or path.startswith(("api/", "internal/")):
             raise HTTPException(404, "Not found")
         root = app.state.settings.frontend_dist.resolve()
         target = (root / (path or "index.html")).resolve()

@@ -1,0 +1,30 @@
+logLevel: error
+authMethod: http
+authHTTPAddress: http://server:8000/internal/media/auth
+authHTTPExclude:
+  - action: api
+
+api: yes
+apiAddress: :9997
+metrics: no
+pprof: no
+playback: no
+rtsp: no
+rtmp: yes
+rtmpAddress: :1935
+rtmpEncryption: 'no'
+hls: yes
+hlsAddress: :8888
+hlsVariant: fmp4
+hlsSegmentDuration: 1s
+hlsSegmentCount: 7
+hlsDirectory: ''
+webrtc: no
+srt: no
+
+pathDefaults:
+  record: no
+paths:
+  live/stream:
+    source: publisher
+    overridePublisher: no

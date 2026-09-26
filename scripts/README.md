@@ -32,6 +32,86 @@ download and does **not** claim offline operation. Each HTTP request has a
 150-second timeout; the inference service has a 140-second timeout in this
 test. Model hosting/network failures fail the release rather than bypass STT.
 
+## Real RTMP/HLS Smoke
+
+`stream_smoke.py` tests an **already running, isolated** current-source stack:
+backend + public nginx ingress + MediaMTX. It never starts/rebuilds containers,
+changes settings, connects to a default preview URL, or stops an existing encoder.
+See [streaming deployment and API contracts](../docs/streaming.md). Use nginx's
+public HTTP origin, not the backend or private MediaMTX API/HLS ports.
+
+Requirements: Python 3.11+, FFmpeg on PATH with lavfi, libx264 and AAC, and
+`ADMIN_PASSWORD` already exported securely for that isolated stack. There is no
+password CLI flag or built-in password. `--base-url` is mandatory; RTMP defaults
+to host `127.0.0.1`, port `21936`. Override both destinations for a separate fixture:
+
+```sh
+python scripts/stream_smoke.py --base-url http://127.0.0.1:28097 --rtmp-host 127.0.0.1 --rtmp-port 21936
+python scripts/stream_smoke.py --base-url http://127.0.0.1:28197 --rtmp-host 127.0.0.1 --rtmp-port 21937 --browser
+```
+
+The runner refuses if publisher status is already online, streaming is disabled,
+or the media service is unavailable. The target must retain MediaMTX's
+`overridePublisher: no` to protect against an encoder connecting after preflight.
+Use `STREAM_ENABLED=true` (the Compose default), and match `COOKIE_SECURE` to the
+HTTP/HTTPS origin. The encoder destination comes from CLI flags plus the **actual
+API stream key**, not the advertised `PUBLIC_HOST` setting.
+
+Checks include anonymous/invalid-Bearer/cookie-only control denial, bearer-only
+HLS denial, all-method public `/internal` denial, cookie scope/lifetime/rotation,
+cross-origin cookie-only authorization denial and disallowed CORS preflight,
+wrong-key RTMP failure within ten seconds, and real H.264/AAC ingest. Synthetic
+video is a 640x360, 25 fps test pattern, with a 440 Hz/48 kHz sine wave, baseline
+H.264 and one-second keyframes. No camera, microphone, speech model, wearer,
+conversation, media recording or on-disk HLS fixture is used.
+
+Publisher readiness and master/child/init/media HLS fetches each have a 30-second
+deadline. The HLS test checks fMP4 bytes, content types and lengths. A Range probe
+validates partial bytes/headers when supported; a consistent full-file 200 from
+an upstream without advertised range support is accepted and reported. Logout
+must revoke both the operator token and its playback cookie without stopping the
+publisher. Cleanup terminates only FFmpeg processes created by this invocation,
+confirms offline with a separate operator session, and attempts to revoke all
+test logins even on failure. FFmpeg has a 120-second media limit and a separate
+125-second wall-clock kill guard. Python uses two logins; `--browser` adds one,
+below the five-per-minute limit on a fresh isolated stack. Repeated runs can hit
+that limit; wait a minute rather than weakening authentication.
+
+For `--browser`, install the existing frontend dependencies and Playwright
+Chromium (`npm ci` and `npx playwright install --with-deps chromium` from
+`frontend`). To use an installed browser instead, export
+`CHROMIUM_PATH=/usr/bin/chromium`; otherwise Playwright uses its managed browser,
+including in CI. The Python runner passes `STREAM_TEST_URL` and `ADMIN_PASSWORD`
+through the child environment. For a feed you have already started on your own
+isolated fixture, the browser-only command is:
+
+```sh
+STREAM_TEST_URL=http://127.0.0.1:28197 CHROMIUM_PATH=/usr/bin/chromium node frontend/scripts/check-stream.mjs
+```
+
+The browser logs in through the UI, opens STREAM, requires decoded video and
+three seconds of advancing playback plus the playing caption, checks full-width
+16:9 layout without overflow at 1440/390/320 px, removes the real playback cookie
+and requires real HTTP authorization recovery, then verifies unmount/request
+cleanup and playing video after returning. It never mocks HTTP or reveals encoder
+settings. It does not pair a wearer or inspect/change an operator draft; draft
+retention is covered separately by the existing isolated application E2E test.
+Its context/browser close and logout is attempted on failure too. Native Safari
+HLS, physical devices, audible output and scheduled five-minute cookie renewal
+remain manual checks; this test covers immediate missing-cookie recovery and API
+cookie rotation, not passage of the full expiration interval.
+
+No artifacts are written by default. Optionally set `STREAM_TEST_SCREENSHOT` to
+a PNG path whose parent directory **already exists** (prepared by your runner).
+Only the STREAM panel is captured, with encoder credentials still hidden. Treat
+even synthetic test artifacts as private. Scripts suppress raw subprocess/HTTP/
+Playwright failures and retain only a bounded private FFmpeg error buffer; they
+never print keys, tokens, passwords or the publisher command. The RTMP key is
+necessarily in FFmpeg's process arguments and travels over plaintext RTMP: use a
+trusted machine/network, avoid process listings/debug traces and disable/redact
+external service access logs. CI runs this test after the existing Compose health
+checks, using its already-installed browser and a separately installed FFmpeg.
+
 ## Publication
 
 `release.yml` runs on `v*` tags and manual dispatch. It first calls the full CI

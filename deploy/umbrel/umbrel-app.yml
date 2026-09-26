@@ -6,17 +6,21 @@ category: social
 version: "0.1.0"
 port: 28097
 description: >-
-  STAGING PACKAGE ONLY. Requires the locally built evencomms:0.1.0 image;
-  no published registry image is supplied. Pair an Even Hub client with a
+  STAGING PACKAGE ONLY. Requires rebuilding evencomms:0.1.0 from current source;
+  the released 0.1.0 image lacks STREAM. No new registry release is supplied.
+  Pair an Even Hub client with a
   browser operator, transcribe short English utterances locally on CPU,
   and optionally draft replies with an existing local Ollama server.
   AI replies require operator approval. A reachable HTTPS origin and
   explicit origin configuration are required for phone deployment.
+  An operator STREAM tab previews one authenticated RTMP feed over HLS,
+  without recording or transcoding. Plaintext RTMP is for trusted LAN/VPN use only.
 developer: EVENCOMMS contributors
 dependencies: []
 defaultUsername: ""
 deterministicPassword: true
 releaseNotes: >-
-  Initial staging package. Validate glasses gestures, phone connectivity,
+  Unreleased STREAM staging; rebuild/redeploy all services and sync both config
+  templates before deployment. Validate glasses gestures, phone connectivity,
   model latency, and target hardware before release. Publish and digest-pin
   the image before promoting this package into an Umbrel store.

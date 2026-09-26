@@ -7,6 +7,12 @@ The installable, digest-pinned package lives in
 The app ID is `kunas-evencomms`. Store metadata/assets must be completed during
 promotion.
 
+**STREAM is unreleased and requires rebuilding/redeploying all services.** The
+released `0.1.0` image lacks streaming. The unchanged `evencomms:0.1.0` tag here
+means a fresh local build of current source, not the published GHCR image.
+Do not modify the published KNS-Umbrel package for this staging deployment;
+promotion requires a future tagged release and separate review.
+
 ## Stage Locally
 
 1. From the EVENCOMMS repository root, run `docker build -t evencomms:0.1.0 .`
@@ -17,20 +23,56 @@ promotion.
 3. Use these files only in a separate local/test Umbrel app staging area under
    app ID `kunas-evencomms`, following that Umbrel version's development workflow.
    Do not copy this unpublishable package into the live KNS store.
-4. Supply the environment through the staging launcher. Umbrel must supply
+4. Synchronize **both** config templates into `${APP_DATA_DIR}/config` before
+   starting or redeploying. Use the staging launcher's exported `APP_DATA_DIR`:
+
+   ```sh
+   mkdir -p "${APP_DATA_DIR:?}/config"
+   cp deploy/umbrel/nginx.conf.template "${APP_DATA_DIR}/config/nginx.conf"
+   cp deploy/umbrel/mediamtx.yml.template "${APP_DATA_DIR}/config/mediamtx.yml"
+   chmod 755 "${APP_DATA_DIR}/config"
+   chmod 644 "${APP_DATA_DIR}/config/nginx.conf" "${APP_DATA_DIR}/config/mediamtx.yml"
+   ```
+
+   These templates are literal configuration, contain no secrets, and match
+   `infra/`. Do not run unrestricted `envsubst`: nginx's `$http_host` and upgrade
+   variables must survive unchanged. If the platform renders templates, verify
+   these exact destination files exist and match before deployment; absent bind
+   sources can become directories. Repeat synchronization after template changes.
+5. Supply the environment through the staging launcher. Umbrel must supply
    `APP_DATA_DIR` and a nonempty `APP_PASSWORD`. The device's `.local` HTTP origin
    is allowed by default. Override `ALLOWED_ORIGINS` for IP access or other
    browser/phone origins, including the external HTTPS origin.
+   Set `COOKIE_SECURE=true` behind TLS. `PUBLIC_HOST` defaults to
+   `${DEVICE_DOMAIN_NAME:-umbrel.local}`; override it with a LAN/VPN hostname or
+   IP reachable by the encoder, without scheme, port or path. `RTMP_PORT=21936`
+   is separate from SteamLab's 21935 but still requires an actual host port check.
+   Set `RTMP_BIND` to the host's LAN/VPN IP where possible; this staging overlay
+   defaults to `0.0.0.0`, unlike standalone's loopback default. Firewall TCP ingest
+   to trusted encoders. Never publicly port-forward plaintext RTMP.
    Configure an existing local `OLLAMA_URL` if wanted; AI is disabled by default
    here. The backend settings in the root README apply to this package too.
-5. Verify startup, authentication, pairing, socket reconnect, deletion and a
-   real transcription on the intended hardware before calling it deployable.
+6. Recreate the full staging stack through Umbrel's development launcher, not
+   just `server`. Verify startup, authentication, pairing, socket reconnect,
+   deletion and a real transcription on the intended hardware before calling it
+   deployable.
+   Follow the [OBS and stream verification guide](../../docs/streaming.md) for
+   live playback, invalid credentials, private ports and callback isolation.
 
 The compose file is an **Umbrel overlay**, not a standalone compose project:
 Umbrel supplies `app_proxy`'s image/network and exposes manifest port `28097`.
 Use the root `compose.yml` for standalone deployment. The proxy target follows
-Umbrel's `kunas-evencomms_server_1` service naming. Check the generated container name
+Umbrel's `kunas-evencomms_web_1:8080` service naming. Check the generated container name
 in your Umbrel version and update the target if its naming differs.
+Never target the raw backend: only `web` blocks `/internal` and `/internal/` for
+every method. Only `web` joins both the default app-proxy network and the private
+application network; `server` and `mediamtx` join only private. This bridge is
+not `internal: true`, so published RTMP and backend model downloads can work.
+Backend `8000`, HLS `8888` and media API `9997` are not published. Both media and
+web wait for the image's backend liveness check, without a dependency cycle.
+MediaMTX's minimal image has no shell-based runtime health check. Web uses the
+official Alpine image's BusyBox `wget` against `/health`. All services have
+bounded JSON-file logs; nginx access logging is disabled.
 
 The application process runs as UID/GID `10001:10001`. A short-lived, networkless
 root `data_init` service initializes only `/data`, `/data/models`, and existing
@@ -71,11 +113,12 @@ Ollama with network/firewall rules since its API is normally unauthenticated.
 2. Build and test the image for each advertised platform with Debian/Python 3.12
    and Node 24. Verify STT wheels, a cold model download, cache reuse, volume
    permissions and phone/TLS operation. Do not advertise untested GPU support.
-3. Publish the release image to a registry you control, confirm it is publicly
-   pullable, and record its immutable digest. The release workflow publishes
+3. For a future version (not released `0.1.0`), publish the release image to a
+   registry you control, confirm it is publicly pullable, and record its immutable
+   digest. The release workflow publishes
    tested amd64 images; the regular CI workflow does not publish.
 4. Replace **both** `evencomms:0.1.0` image references with the published
-   `registry/owner/image:0.1.0@sha256:<verified-digest>` and remove `pull_policy:
+   `registry/owner/image:<new-version>@sha256:<verified-digest>` and remove `pull_policy:
    never`. Do not promote a local-only tag or a made-up GHCR reference.
 5. Test a clean pull/install and an upgrade with existing data, then submit the
    completed package to the intended store in a separate reviewed change.

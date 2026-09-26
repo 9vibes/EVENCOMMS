@@ -1,3 +1,4 @@
+import secrets
 import sqlite3
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -39,7 +40,15 @@ class Store:
                 UNIQUE(session_id, role, client_id)
             );
             CREATE INDEX IF NOT EXISTS messages_session_seq ON messages(session_id, seq);
+            CREATE TABLE IF NOT EXISTS stream_settings (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                publisher_secret TEXT NOT NULL,
+                reader_secret TEXT NOT NULL
+            );
         """)
+        with self.db:
+            self.db.execute("INSERT OR IGNORE INTO stream_settings VALUES (1, ?, ?)",
+                            (secrets.token_urlsafe(32), secrets.token_urlsafe(32)))
 
     def session(self, session_id: str):
         row = self.db.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()

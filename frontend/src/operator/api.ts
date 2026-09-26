@@ -35,7 +35,7 @@ export async function request<T>(
   path: string,
   token: string | null,
   signal: AbortSignal,
-  options: { method?: string; body?: unknown } = {},
+  options: { method?: string; body?: unknown; credentials?: 'same-origin' } = {},
 ): Promise<T> {
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -46,7 +46,7 @@ export async function request<T>(
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
     signal: AbortSignal.any([signal, AbortSignal.timeout(120000)]),
     cache: 'no-store',
-    credentials: 'omit',
+    credentials: options.credentials ?? 'omit',
   });
   if (!response.ok) {
     let detail =

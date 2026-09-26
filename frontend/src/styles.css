@@ -302,6 +302,34 @@ body:has(> #root > .operator-app) { margin: 0; }
   .operator-app .op-login-intro h1 { font-size: 43px; }
   .operator-app .op-login-card input { font-size: 16px; }
 }
+.operator-app .op-console-navigation { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.operator-app .op-tabs { display: flex; gap: 6px; }
+.operator-app .op-tabs button { background: none; border: 0; border-bottom: 2px solid transparent; padding: 8px 5px; font: inherit; letter-spacing: inherit; color: var(--op-muted); }
+.operator-app .op-tabs button[aria-selected="true"] { color: var(--op-acid); border-bottom-color: var(--op-acid); }
+.operator-app .op-tabs button > span { color: var(--op-muted); margin-right: 12px; }
+.operator-app .op-stream { margin-top: 28px; }
+.operator-app .op-stream-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 14px; }
+.operator-app .op-stream-heading h2 { font-size: 16px; font-weight: 600; }
+.operator-app .op-live-frame { position: relative; aspect-ratio: 16 / 9; width: 100%; background: var(--comms-deep); border: 1px solid var(--op-line); border-radius: 8px; overflow: hidden; }
+.operator-app .op-live-frame video { display: block; width: 100%; height: 100%; object-fit: contain; }
+.operator-app .op-live-standby { position: absolute; inset: 0 0 44px; display: flex; justify-content: center; align-items: center; gap: 12px; pointer-events: none; color: var(--op-muted); font: 10px var(--op-mono); letter-spacing: .16em; }
+.operator-app .op-live-caption { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 0; min-height: 52px; font-size: 12px; color: var(--op-muted); }
+.operator-app .op-stream-telemetry { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0 0 12px; border-block: 1px solid var(--op-line); }
+.operator-app .op-stream-telemetry > div { padding: 16px 0; }
+.operator-app .op-stream-telemetry dt { color: var(--op-muted); font-size: 10px; margin-bottom: 6px; }
+.operator-app .op-stream-telemetry dd { margin: 0; font: 12px/1.6 var(--op-mono); overflow-wrap: anywhere; }
+.operator-app .op-stream-config { margin-top: 24px; }
+.operator-app .op-stream-disclosure { width: 100%; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 18px; border: 0; background: none; text-align: left; font-size: 12px; }
+.operator-app .op-stream-disclosure > span:last-child { color: var(--op-acid); font: 10px/1.8 var(--op-mono); }
+.operator-app .op-stream-config-body { padding: 0 18px 18px; display: grid; gap: 12px; font-size: 12px; }
+.operator-app .op-stream-config-body > p { color: var(--op-muted); max-width: 850px; }
+.operator-app .op-stream-field { display: flex; gap: 8px; flex-wrap: wrap; }
+.operator-app .op-stream-field input { flex: 1 1 240px; min-width: 0; width: 100%; background: var(--comms-inset); border: 1px solid var(--comms-control-line); border-radius: 4px; padding: 10px; color: var(--op-ink); font: 12px var(--op-mono); }
+@media (max-width: 480px) {
+  .operator-app .op-stream-telemetry { grid-template-columns: 1fr 1fr; gap: 0 12px; }
+  .operator-app .op-stream-telemetry > div:last-child { grid-column: 1 / -1; padding-top: 0; }
+  .operator-app .op-live-caption { flex-wrap: wrap; }
+}
 @media (prefers-reduced-motion: reduce) {
   .operator-app *, .operator-app *::before, .operator-app *::after { transition: none !important; scroll-behavior: auto !important; }
 }

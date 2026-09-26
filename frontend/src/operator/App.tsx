@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { ApiError, characterCount, clientId, errorText, mergeMessages, request } from './api';
 import type { Message, ServiceStatus, Session } from './api';
+import StreamTab from './StreamTab';
 
 const TOKEN_KEY = 'evencomms.operator.token';
 const POLL_INTERVAL = 2000;
@@ -82,16 +83,27 @@ export default function App() {
     }
   });
   const [loginNotice, setLoginNotice] = useState('');
+  const loggingOut = useRef(false);
 
-  function logout(expired = false) {
+  async function logout(expired = false) {
+    if (loggingOut.current) return;
+    loggingOut.current = true;
+    let notice = expired ? 'Your operator session has expired. Sign in to continue.' : 'Signed out of this console.';
+    if (!expired && token) {
+      try {
+        await request<void>('/api/logout', token, AbortSignal.timeout(10000), {
+          method: 'POST', credentials: 'same-origin',
+        });
+      } catch {
+        notice = 'Signed out locally. Server logout was not confirmed; playback access may remain until it expires.';
+      }
+    }
     try {
       sessionStorage.removeItem(TOKEN_KEY);
     } catch {
       /* In-memory logout still succeeds. */
     }
-    setLoginNotice(
-      expired ? 'Your operator session has expired. Sign in to continue.' : 'Signed out of this console.',
-    );
+    setLoginNotice(notice);
     setToken(null);
   }
 
@@ -104,6 +116,7 @@ export default function App() {
           notice={loginNotice}
           onLogin={(nextToken) => {
             sessionStorage.setItem(TOKEN_KEY, nextToken);
+            loggingOut.current = false;
             setLoginNotice('');
             setToken(nextToken);
           }}
@@ -230,7 +243,8 @@ function Login({ notice, onLogin }: { notice: string; onLogin: (token: string) =
 type Draft = { text: string; revision: number; attempt?: { text: string; id: string } };
 type Action = { kind: 'send' | 'suggest' | 'delete'; sessionId: string; controller: AbortController };
 
-function Console({ token, onLogout }: { token: string; onLogout: (expired?: boolean) => void }) {
+function Console({ token, onLogout }: { token: string; onLogout: (expired?: boolean) => Promise<void> }) {
+  const [tab, setTab] = useState<'operator' | 'stream'>('operator');
   const [sessions, setSessions] = useState<Session[]>([]);
   const [sessionsLoaded, setSessionsLoaded] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -257,6 +271,7 @@ function Console({ token, onLogout }: { token: string; onLogout: (expired?: bool
   const [pairingExpired, setPairingExpired] = useState(false);
   const unauthorizedRef = useRef(onLogout);
   unauthorizedRef.current = onLogout;
+  const onUnauthorized = useCallback(() => { void unauthorizedRef.current(true); }, []);
   const mounted = useRef(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const followMessages = useRef(true);
@@ -535,7 +550,7 @@ function Console({ token, onLogout }: { token: string; onLogout: (expired?: bool
             <i />
             {listError ? 'RECONNECTING' : lastSync ? 'SERVICE ONLINE' : 'CONNECTING'}
           </span>
-          <button className="op-text-button" onClick={() => onLogout()}>
+          <button className="op-text-button" onClick={() => void onLogout()}>
             Sign out{' '}
             <span aria-hidden="true">
               <Icon name="arrow" />
@@ -546,22 +561,51 @@ function Console({ token, onLogout }: { token: string; onLogout: (expired?: bool
       <main className="op-main">
         <section className="op-page-heading" aria-labelledby="console-title">
           <div>
-            <div className="op-eyebrow">CONTROL ROOM / OPERATOR</div>
+            <div className="op-eyebrow op-console-navigation">
+              <span>CONTROL ROOM /</span>
+              <div role="tablist" aria-label="Control room" className="op-tabs">
+                {(['operator', 'stream'] as const).map((name, index) => (
+                  <button
+                    key={name}
+                    id={`tab-${name}`}
+                    role="tab"
+                    aria-selected={tab === name}
+                    aria-controls={`panel-${name}`}
+                    tabIndex={tab === name ? 0 : -1}
+                    onClick={() => setTab(name)}
+                    onKeyDown={(event) => {
+                      const next = event.key === 'Home' ? 0 : event.key === 'End' ? 1
+                        : event.key === 'ArrowRight' || event.key === 'ArrowLeft' ? 1 - index : null;
+                      if (next === null) return;
+                      event.preventDefault();
+                      const name = next === 0 ? 'operator' : 'stream';
+                      setTab(name);
+                      document.getElementById(`tab-${name}`)?.focus();
+                    }}
+                  >{index === 1 && <span aria-hidden="true">/</span>}{name.toUpperCase()}</button>
+                ))}
+              </div>
+            </div>
             <h1 id="console-title">
               Super Secret Comms Platform
             </h1>
-            <p>A direct line to your wearer. Thoughtful replies, without the noise.</p>
+            <p>{tab === 'operator' ? 'A direct line to your wearer. Thoughtful replies, without the noise.' : 'One live source. A direct view, without recording or analysis.'}</p>
           </div>
-          <button
+          {tab === 'operator' && <button
             className="op-button op-button-acid"
             onClick={() => void createPairing()}
             disabled={pairingBusy}
           >
             <Icon name="plus" />
             {pairingBusy ? 'Creating code...' : 'Pair a wearer'}
-          </button>
+          </button>}
         </section>
 
+        <section id="panel-stream" role="tabpanel" aria-labelledby="tab-stream" hidden={tab !== 'stream'} tabIndex={0}>
+          {tab === 'stream' && <StreamTab token={token} onUnauthorized={onUnauthorized} />}
+        </section>
+        <section id="panel-operator" role="tabpanel" aria-labelledby="tab-operator" hidden={tab !== 'operator'} tabIndex={0}>
+        {tab === 'operator' && <>
         <div className="op-feedback" aria-live="polite" aria-atomic="true">
           <span>{notice}</span>
         </div>
@@ -922,6 +966,8 @@ function Console({ token, onLogout }: { token: string; onLogout: (expired?: bool
             </section>
           </aside>
         </div>
+        </>}
+        </section>
       </main>
       <Footer />
     </div>
