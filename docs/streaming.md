@@ -1,10 +1,10 @@
-# Live Stream (0.2.0)
+# Live Stream (0.2.1)
 
 One RTMP publisher feeds MediaMTX at `live/stream`; operator browsers use an
 authenticated same-origin HLS proxy. No recording, transcoding or analysis.
 The original conversation API and wearer client remain unchanged.
 
-Version `0.1.0` does **not** contain STREAM. Update to `0.2.0` and redeploy **all
+Version `0.1.0` does **not** contain STREAM. Update to `0.2.1` and redeploy **all
 services**, including the new public `web` proxy and MediaMTX. Back up the app,
 then update it in place rather than uninstalling: existing conversations,
 pairings, application password and model cache remain in place. The store's init
@@ -122,7 +122,7 @@ Do not substitute browser URLs or publish these ports to fix connectivity.
 
 Use [the staging instructions](../deploy/umbrel/README.md) for local development,
 or the digest-pinned KNS-Umbrel package for installation. Local builds use
-`evencomms:0.2.0`. The init service copies the image's bundled `infra/` files into
+`evencomms:0.2.1`. The init service copies the image's bundled `infra/` files into
 `${APP_DATA_DIR}/config` at startup. Both consumers mount the whole directory
 read-only and wait for initialization through the backend health dependency.
 No manual copying, platform template expansion or nginx entrypoint rendering is

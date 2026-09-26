@@ -10,7 +10,7 @@ services:
   server:
     build:
       context: .
-    image: evencomms:0.2.0
+    image: evencomms:0.2.1
     pull_policy: never
     init: true
     restart: unless-stopped

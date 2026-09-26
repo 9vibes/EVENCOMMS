@@ -27,7 +27,7 @@ jobs:
       - name: Install backend test dependencies
         run: pip install '.[test]'
       - name: Backend tests
-        run: pytest
+        run: python -m pytest
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
@@ -53,7 +53,7 @@ jobs:
           ADMIN_PASSWORD: ci-only-not-a-deployment-password
         run: docker compose config --quiet
       - name: Build local image (no publication)
-        run: docker build -t evencomms:0.2.0 .
+        run: docker build -t evencomms:0.2.1 .
       - name: Install synthetic stream publisher
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - name: Container smoke test (no inference)

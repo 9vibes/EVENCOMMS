@@ -1,6 +1,6 @@
 # EVENCOMMS Store Assets
 
-Source assets for EVENCOMMS **0.2.0** integration into KNS-Umbrel. Captured from
+Source assets for EVENCOMMS **0.2.1** integration into KNS-Umbrel. Captured from
 the release's already-built `frontend/dist`; the operator footer reads `v0.2`.
 No store manifests or application files are changed here.
 

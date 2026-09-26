@@ -6,7 +6,7 @@ reply on the glasses. English speech transcription runs locally; an existing
 local Ollama server can suggest a reply, but **the operator must review and send
 it**. There is no cloud inference integration and no automatic AI reply.
 
-Version `0.2.0` adds live RTMP monitoring. The installable Umbrel package is maintained
+Version `0.2.1` adds live RTMP monitoring. The installable Umbrel package is maintained
 in [KNS-Umbrel](https://github.com/9vibes/KNS-Umbrel/tree/master/kunas-evencomms).
 The files in `deploy/umbrel` remain local-development templates, not the store's
 digest-pinned release package. See [the protocol](docs/protocol.md) for API
@@ -90,7 +90,7 @@ curl --fail http://127.0.0.1:28097/health
    simulation**. This does not promise browser microphone capture or validate
    real glasses audio.
 
-The locally built tag is `evencomms:0.2.0`; no registry pull is needed or claimed.
+The locally built tag is `evencomms:0.2.1`; no registry pull is needed or claimed.
 The API binds port `8000` inside the private network and is **never published**.
 The only HTTP entry is `web` nginx on container port `8080`, published as host
 `28097`, bound to loopback by default. For isolated LAN testing set
@@ -289,7 +289,8 @@ command nor conversation deletion removes independent backups.
 ## Development And Verification
 
 On Debian/glibc Python 3.12, install `pip install '.[stt,test]'`, then run
-`pytest`. In `frontend`, run `npm ci`, `npm test`, and `npm run build` using
+`python -m pytest` from the repository root so tests use the source tree and its
+bundled infrastructure files. In `frontend`, run `npm ci`, `npm test`, and `npm run build` using
 Node 24. For typed-only backend development, `pip install '.[test]'` plus
 `STT_ENABLED=false` avoids installing speech runtime dependencies. A local
 Uvicorn invocation must also use a single worker and the socket limits above.

@@ -7,16 +7,16 @@ The installable, digest-pinned package lives in
 The app ID is `kunas-evencomms`. Store metadata/assets must be completed during
 promotion.
 
-**STREAM requires version 0.2.0 and deployment of all services.** The `0.1.0`
-image lacks streaming. The `evencomms:0.2.0` tag here is a local build, not the
+**STREAM requires version 0.2.1 and deployment of all services.** The `0.1.0`
+image lacks streaming. The `evencomms:0.2.1` tag here is a local build, not the
 published GHCR reference. Use the KNS-Umbrel package for a normal installation;
 these development files do not update the live store automatically.
 
 ## Stage Locally
 
-1. From the EVENCOMMS repository root, run `docker build -t evencomms:0.2.0 .`
+1. From the EVENCOMMS repository root, run `docker build -t evencomms:0.2.1 .`
    on the target host. The frontend package and lockfile must be present.
-2. If building elsewhere, use `docker save evencomms:0.2.0` and `docker load`
+2. If building elsewhere, use `docker save evencomms:0.2.1` and `docker load`
    to transfer the image to the Umbrel Docker daemon. Build for the target
    architecture; a tag alone does not make an image multi-architecture.
 3. Use these files only in a separate local/test Umbrel app staging area under
@@ -109,7 +109,7 @@ Ollama with network/firewall rules since its API is normally unauthenticated.
    registry you control, confirm it is publicly pullable, and record its immutable
    digest. The release workflow publishes
    tested amd64 images; the regular CI workflow does not publish.
-4. Replace **both** `evencomms:0.2.0` image references with the published
+4. Replace **both** `evencomms:0.2.1` image references with the published
    `registry/owner/image:<new-version>@sha256:<verified-digest>` and remove `pull_policy:
    never`. Do not promote a local-only tag or a made-up GHCR reference.
 5. Test a clean pull/install and an upgrade with existing data, then submit the

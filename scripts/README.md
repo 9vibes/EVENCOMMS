@@ -5,13 +5,13 @@ only the Python standard library on the host; WebSocket checks run with the
 image's installed dependencies. It never pulls or rebuilds the supplied image.
 
 ```sh
-python scripts/container_smoke.py --image evencomms:0.2.0
-python scripts/container_smoke.py --image evencomms:0.2.0 --speech-pcm /tmp/speech.pcm
+python scripts/container_smoke.py --image evencomms:0.2.1
+python scripts/container_smoke.py --image evencomms:0.2.1 --speech-pcm /tmp/speech.pcm
 ```
 
 Add `--upgrade-from <local-prior-image>` to seed the data/model cache with an
 already-pulled prior image before starting the candidate image on the same
-volumes. The 0.2.0 release workflow uses the immutable 0.1.0 image for this check.
+volumes. The 0.2.1 release workflow uses the immutable 0.1.0 image for this check.
 The candidate's initializer is tested on both fresh and existing volumes,
 including literal managed-config installation and replacement of stale configs.
 Existing SQLite permissions are deliberately tightened to `0600`/UID 10001;
