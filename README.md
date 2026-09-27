@@ -8,13 +8,16 @@ it**. Wearer assistance remains local and human-approved. The separate optional
 RESEARCH tab can send an operator's questions and selected still frames to OpenAI;
 it never automatically replies to the glasses.
 
-Version `0.4.0` adds an **experimental ChatGPT account connection through Codex**
-for operator-only Research. Source files alone do not establish successful CI,
-image publication or an Umbrel installation. Consult the
-[release page](https://github.com/9vibes/EVENCOMMS/releases) for actual artifacts
-and check results. The release image names share the existing public package:
-`ghcr.io/9vibes/evencomms:0.4.0` for the app and
-`ghcr.io/9vibes/evencomms:0.4.0-codex` for the isolated bridge.
+Version `0.4.1` is a device-login hotfix for the **experimental ChatGPT account
+connection through Codex** introduced in `0.4.0` for operator-only Research.
+It fixes the disabled login button on the default HTTP Umbrel console, preserves
+OpenAI-issued codes including nine-digit codes, and fixes startup-proof and
+overlapping-heartbeat login failures. See the [hotfix notes](docs/codex.md#041-hotfix).
+Consult the [release page](https://github.com/9vibes/EVENCOMMS/releases) and
+[CI runs](https://github.com/9vibes/EVENCOMMS/actions) for actual artifacts and
+verification results. The `0.4.1` publication targets share the existing public package:
+`ghcr.io/9vibes/evencomms:0.4.1` for the app and
+`ghcr.io/9vibes/evencomms:0.4.1-codex` for the isolated bridge.
 The installable Umbrel package is maintained
 in [KNS-Umbrel](https://github.com/9vibes/KNS-Umbrel/tree/master/kunas-evencomms).
 The files in `deploy/umbrel` remain local-development templates, not the store's
@@ -23,10 +26,11 @@ contracts. Physical G2/phone behavior still needs hardware acceptance testing.
 
 Codex uses eligible ChatGPT plan allowance rather than API-key billing, with no
 automatic API, provider or model fallback and no model-entitlement guarantee.
-The `0.4.0` Umbrel source package installs its isolated service by default,
+The Umbrel source package installs its isolated service by default,
 automatically provisioning a private service token. Startup runs synthetic
 loopback safety probes, not real account login or inference. Account use requires
 explicit Research provider selection, device sign-in, model selection and Send.
+This hotfix retains the `0.4.0` directories, networks and resource limits.
 The UI still defaults to API mode; existing optional OpenAI keys are unchanged.
 Standalone `compose.yml` has no Codex service unless you add `compose.codex.yml`.
 See [Codex setup, allowance and privacy](docs/codex.md).
@@ -69,10 +73,13 @@ not live OpenAI calls. See
 
 ### Experimental Codex Mode
 
-Choose **ChatGPT account (Experimental Codex)** in Research, then **Sign in with
-ChatGPT**. Complete device login on OpenAI's site; never paste account passwords,
-cookies or OAuth tokens into EVENCOMMS. Remote sign-in requires HTTPS, configured
-manually with explicit origins; exact localhost HTTP is for isolated development.
+Choose **ChatGPT account (Experimental Codex)** in Research, then **Get Codex login
+code**. Enter that one-time code on OpenAI's HTTPS device page, just as with
+`codex login --device-auth`; never paste account passwords, cookies or OAuth
+tokens into EVENCOMMS. HTTPS is recommended for the console. The HTTP Umbrel
+console can request a code after an explicit trusted-network confirmation, but
+its operator session and code remain exposed on that connection. API-key entry
+still requires HTTPS or exact localhost/loopback access.
 Choose a pinned model explicitly and use **Send via Codex** to submit displayed
 history and selected stills. Signing in and choosing a model do not submit them.
 
@@ -106,7 +113,7 @@ continuous, word-by-word partial updates are **not guaranteed**.
 
 Add `https://github.com/9vibes/KNS-Umbrel` to Umbrel's community app stores, then
 install **EVENCOMMS** (`kunas-evencomms`). Check that package's version and verified
-digests rather than assuming this source candidate is already available there.
+digests to confirm which release is available there.
 The release target is Linux x86-64 (amd64), with CPU speech recognition and no
 NVIDIA runtime. ARM support is not established by the pinned Codex ARM64 asset.
 
@@ -125,7 +132,7 @@ Read the [store setup guide](https://github.com/9vibes/KNS-Umbrel/blob/master/ku
 for persistent storage, settings, TLS and phone packaging. Adding the package to
 the store is not the same as installing it on a particular Stone.
 
-In the `0.4.0` source package, `data_init` provisions a separate private
+Since `0.4.0`, the source package's `data_init` provisions a separate private
 `codex-auth/token`, mounted read-only by backend and bridge, never by nginx or
 MediaMTX. No app-password reuse or manual bridge credential setup is needed.
 The normal server depends only on `data_init`, not bridge health. No public
@@ -162,9 +169,9 @@ curl --fail http://127.0.0.1:28097/health
    simulation**. This does not promise browser microphone capture or validate
    real glasses audio.
 
-The locally built tag is `evencomms:0.4.0`; no registry pull is needed or claimed.
+The locally built tag is `evencomms:0.4.1`; no registry pull is needed or claimed.
 This default stack does not install/start Codex. The optional standalone
-`compose.codex.yml` overlay builds `evencomms-codex:0.4.0` and uses a manually
+`compose.codex.yml` overlay builds `evencomms-codex:0.4.1` and uses a manually
 generated private `.env` service token, unlike Umbrel's automatic provisioning.
 Follow [the Codex deployment guide](docs/codex.md#standalone-opt-in) to opt in.
 The API binds port `8000` inside the private network and is **never published**.
@@ -446,11 +453,14 @@ end-to-end tests, Even packaging, Compose configuration and image smoke tests.
 Codex checks use the pinned real binary with synthetic loopback OAuth/inference,
 not a live account. Its authenticated private `GET /ready` must pass the actual
 generation gate with zero idle account sessions; `/health` alone is insufficient.
-The `0.4.0` release must pass CI, CPU transcription with synthetic speech,
+The `0.4.1` release must pass CI, CPU transcription with synthetic speech,
 persistence/upgrade checks and isolated bridge checks before publishing the
 exact tested amd64 images. The canonical store update follows verified anonymous
-pulls of both digests. See [release checks](scripts/README.md); this checklist is
-not a claim that the candidate has passed GitHub CI or been published. Before
+pulls of both digests. Upgrade gates include the pinned `0.4.0` app and preservation
+of its initializer-created private service token. The Codex CI job also runs the
+offline native production-Session login test; the ordinary backend suite skips
+that test when the pinned binary is not on `PATH`.
+See [release checks](scripts/README.md) and the linked CI/release results. Before
 deployment, verify a real utterance, model cache reuse, pairing/reconnect, gesture ordering, deletion,
 TLS/CORS/network permissions, and an operator-approved AI reply on target
 hardware. Report the actual test results, not a fixed historical test count.

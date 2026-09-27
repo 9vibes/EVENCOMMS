@@ -1,8 +1,8 @@
-# Experimental Codex Research (0.4.0)
+# Experimental Codex Research (0.4.1)
 
-EVENCOMMS `0.4.0` adds **ChatGPT account (Experimental Codex)** alongside the
-existing **OpenAI API key** connection in Research. The feature remains
-**experimental**. Check the
+EVENCOMMS `0.4.0` introduced **ChatGPT account (Experimental Codex)** alongside the
+existing **OpenAI API key** connection in Research. Version `0.4.1` fixes device
+login; the feature remains **experimental**. Check the
 [release page](https://github.com/9vibes/EVENCOMMS/releases) and canonical
 [KNS-Umbrel package](https://github.com/9vibes/KNS-Umbrel/tree/master/kunas-evencomms)
 for actual CI results, published digests and installation instructions. Source
@@ -23,6 +23,28 @@ uses the official pinned `0.157.1` runtime over private stdio, with EVENCOMMS's 
 client identity. You sign in on OpenAI's site using a device code; EVENCOMMS never
 asks you to paste an account password, browser cookie or OAuth token. It is not
 a general-purpose ChatGPT web API, a cookie scraper or unlimited API access.
+
+## 0.4.1 Hotfix
+
+- Fixes the disabled device-login button on Umbrel's default HTTP console.
+  **Get Codex login code** requires explicit trusted-network confirmation on
+  non-loopback HTTP; this exception applies only to Codex. API-key entry still
+  requires HTTPS or exact localhost/loopback. Console traffic remains unencrypted;
+  OpenAI account sign-in must always use its HTTPS device page.
+- Displays the actual OpenAI-issued code unchanged, including nine-digit numeric
+  codes and other supported formats. EVENCOMMS never generates a substitute code
+  or imposes a nine-digit-only rule.
+- Independently verifies the pinned binary off the event loop within 10 seconds,
+  then bounds the generation proof at 75 seconds. A generation-proof timeout or
+  failure preserves verified login readiness, never bypasses generation safety.
+  Heartbeat acknowledgements overlapping login no longer cancel an unacknowledged
+  session; uncertain creation keeps its cleanup obligation rather than orphaning it.
+
+This hotfix adds no directories, networks, ports or resource-limit changes.
+The existing Umbrel bridge stays installed and idle until explicit account use;
+provider choice, device login, model selection and Send remain opt-in. Official
+Codex `0.157.1` and its binary hashes are unchanged. Update both app and bridge
+images in place, preserving the existing private `codex-auth/token` and app data.
 
 ## Cost And Availability
 
@@ -76,10 +98,14 @@ MediaMTX or manifest/UI metadata. Back up this private directory alongside app
 data and preserve its ownership/modes on restore. Do not persist account tokens.
 
 Both the ordinary server and bridge depend only on successful `data_init`, not
-on bridge health. There is no new enable flag or public port. Configure TLS
-manually for normal private use and remote device sign-in, with exact
-`ALLOWED_ORIGINS` and `COOKIE_SECURE=true`; installing Codex does not set up TLS.
-The bridge's presence is not an account connection or permission to send data.
+on bridge health. There is no new enable flag or public port. Prefer manually
+configured TLS for private use, with exact `ALLOWED_ORIGINS` and
+`COOKIE_SECURE=true`; installing Codex does not set up TLS. Device-code login
+can also start from the HTTP Umbrel console after a trusted-network confirmation.
+That does not encrypt the console's operator session, code or chat. Do not use
+plaintext access on an untrusted/public network. OpenAI account sign-in itself
+always takes place on OpenAI's HTTPS site. The bridge's presence is not an account
+connection or permission to send data.
 
 ## Standalone Opt-In
 
@@ -92,9 +118,12 @@ only this explicit overlay adds it.
    `CODEX_BRIDGE_TOKEN` in that ignored `.env`. This is a local service credential,
    not your OpenAI password, API key or operator password. Keep `.env` private;
    do not publish Compose's expanded config.
-2. Use HTTPS for remote operator access, with explicit `ALLOWED_ORIGINS` and
-   `COOKIE_SECURE=true`. Exact localhost/loopback HTTP is permitted for isolated
-   local development; remote plain HTTP cannot initiate sign-in in the UI.
+2. Prefer HTTPS for remote operator access, with explicit `ALLOWED_ORIGINS` and
+   `COOKIE_SECURE=true`. On a trusted LAN/VPN, HTTP device-code login is available
+   after a warning and confirmation. API-key entry remains disabled there; the
+   exception for exact localhost/loopback development is unchanged. Do not set
+   `COOKIE_SECURE=true` on a plain HTTP deployment: its playback cookie would not
+   be sent. TLS is still recommended to protect all console traffic.
 3. From the repository root, build and start the explicitly opted-in stack:
 
 ```sh
@@ -102,7 +131,7 @@ docker compose -f compose.yml -f compose.codex.yml config --quiet
 docker compose -f compose.yml -f compose.codex.yml up -d --build --wait --wait-timeout 150
 ```
 
-The local source tags are `evencomms:0.4.0` and `evencomms-codex:0.4.0`, not registry
+The local source tags are `evencomms:0.4.1` and `evencomms-codex:0.4.1`, not registry
 references. The optional override supplies `CODEX_BRIDGE_URL=http://codex-bridge:8001`
 only to the application server and shares the bridge token with those two services.
 The backend requires a URL and one token source together, and validates an
@@ -132,7 +161,10 @@ loopback-only probe verifies the schema, synthetic login/refresh, ephemeral
 credentials, both model selectors, exact text/image history and an empty tool
 registry. Unexpected tool calls and approval requests are rejected. If the proof
 fails, generation stays disabled; the UI never falls back to paid API mode.
-The startup proof has a 75-second deadline and Compose allows a 90-second health
+Pinned-binary verification runs independently with a 10-second deadline, followed
+by the generation proof's 75-second deadline. If that longer proof times out or
+fails, an independently verified binary can still issue login codes; generation
+remains disabled until its complete proof passes. Compose allows a 90-second health
 start period. `/health` establishes only liveness. The private `GET /ready`
 requires the bridge's service Bearer token and returns `{binary_verified,
 generation_enabled, active_sessions}`, never credentials, codes, account details,
@@ -164,9 +196,14 @@ docker compose -f compose.yml -f compose.codex.yml rm -f codex-bridge
 1. Open Research and select **ChatGPT account (Experimental Codex)**. Confirm clearing
    any current local conversation. If the server has not enabled the bridge, the
    UI reports that and leaves sending disabled.
-2. Choose **Sign in with ChatGPT**, open the displayed OpenAI device sign-in link,
-   and enter the code. Enable device-code authentication in ChatGPT security
-   settings or ask the workspace administrator if OpenAI requires it.
+2. Choose **Get Codex login code**. On HTTP, confirm only if you trust the LAN/VPN.
+   Open the displayed `https://auth.openai.com/codex/device` link and enter the
+   code exactly as shown. This is the same flow as `codex login --device-auth`.
+   OpenAI issues the code; nine-digit numeric codes and other supported code
+   formats are preserved, never fabricated or reformatted by EVENCOMMS. A code
+   from a separate CLI session authorizes that session, not this app. Enable
+   device-code authentication in ChatGPT security settings or ask the workspace
+   administrator if OpenAI requires it. The code expires after 15 minutes.
 3. Wait for **ChatGPT connected**, then explicitly choose a Codex model. Runtime
    verification failure is shown separately and keeps Send disabled.
 4. Write a question and optionally capture/review still frames. Only **Send via
@@ -212,7 +249,9 @@ bridge lease every 30 seconds; if it crashes or cleanup cannot reach the bridge,
 the bridge expires the lease independently. Scheduler/cleanup time can add a small
 delay. Failed cleanup can temporarily reserve one of the two session slots.
 Lease acknowledgements list only existing healthy sessions; a failed login's slot
-is reclaimed even when its browser is no longer polling. Chat admission is capped
+is reclaimed even when its browser is no longer polling. A heartbeat that overlaps
+an unacknowledged login cannot cancel it merely because its remote session has
+not appeared yet; uncertain creation retains its cleanup obligation. Chat admission is capped
 before body receipt at two waiters per operator/four globally, including duplicate
 request IDs. Codex and API image validators each allow two workers, so the optional
 mode can permit four concurrent validation workers in the main backend.
@@ -233,11 +272,17 @@ loopback synthetic OAuth/provider fixture with no live OpenAI requests:
 ```sh
 npm ci --prefix codex_bridge --ignore-scripts --no-audit --no-fund
 python scripts/check_codex_runtime.py --binary codex_bridge/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex --temp-parent /tmp
+PATH="$PWD/codex_bridge/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin:$PATH" python -m pytest backend/tests/test_codex_bridge.py -k offline_pinned_binary_device_login_uses_production_session
 ```
 
 Use a Python environment with the project test dependencies. The script prints
-only bounded proof results, never real credentials. CI/release verification must
-build and exercise the bridge under its container controls without an account,
+only bounded proof results, never real credentials. The production `Session`
+test uses the actual pinned native binary and a synthetic nine-digit device-code
+fixture, without an account request. It skips in the ordinary backend suite when
+the binary is missing from `PATH`; the dedicated Codex CI job installs the locked
+binary and puts it on `PATH` so this test runs, not skips.
+CI/release verification must build and exercise the bridge under its container
+controls without an account,
 including authenticated `/ready` assertions on its binary and generation gates
 and zero idle sessions. `/health` or an exited probe script alone is insufficient
 to establish that the deployed bridge enabled generation.
@@ -245,8 +290,8 @@ See [the pinned protocol evidence](../codex_bridge/PROTOCOL.md) for exact recove
 sequences and [the script guide](../scripts/README.md#codex-runtime-probe).
 
 Planned publication uses **the same existing public package** for
-`ghcr.io/9vibes/evencomms:0.4.0` (app/init) and
-`ghcr.io/9vibes/evencomms:0.4.0-codex` (bridge). Promote the canonical Umbrel package
+`ghcr.io/9vibes/evencomms:0.4.1` (app/init) and
+`ghcr.io/9vibes/evencomms:0.4.1-codex` (bridge). Promote the canonical Umbrel package
 only after the exact tested images are published, both digests are anonymously
 pullable, and the actual release-run results are recorded. No digest or CI
 success is implied by these source tags. See [release checks](../scripts/README.md#publication).

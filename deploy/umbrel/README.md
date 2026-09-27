@@ -1,14 +1,15 @@
 # Umbrel Staging Package
 
-This is the **0.4.0 local staging candidate, not a published store release**.
-Neither local-only image references nor these templates should be installed from a store.
+These are the **0.4.1 hotfix source-staging templates**, using local build tags.
+They are not the digest-pinned store package.
 The installable, digest-pinned package lives in
 [KNS-Umbrel](https://github.com/9vibes/KNS-Umbrel/tree/master/kunas-evencomms).
 The app ID remains `kunas-evencomms`; web port `28097` and RTMP port `21936` are
-unchanged. Consult the GitHub release page and canonical store package for
-published references. These templates are not evidence of an actual installation.
+unchanged. Consult the [release page](https://github.com/9vibes/EVENCOMMS/releases),
+[CI runs](https://github.com/9vibes/EVENCOMMS/actions) and canonical store package for
+publication and verification status.
 
-**Version 0.4.0 requires deployment of the full stack and both images.** It adds
+**Deploy the full stack and both 0.4.1 images.** Version 0.4.0 introduced
 experimental Codex Research, with an isolated bridge running by default but
 account use explicitly opt-in. Startup runs synthetic loopback probe processes;
 it does not log in to a real account or send real inference requests. Operators
@@ -16,9 +17,17 @@ must select Codex, complete device sign-in, choose a model and Send. The API
 provider remains the UI default and existing OpenAI key overrides are preserved.
 A failed bridge or safety probe does not block ordinary app startup or other features.
 
-The local tags are `evencomms:0.4.0` and `evencomms-codex:0.4.0`. Planned publication
-uses the same existing GHCR package for `ghcr.io/9vibes/evencomms:0.4.0` and
-`ghcr.io/9vibes/evencomms:0.4.0-codex`; these names are not proof of publication.
+The 0.4.1 hotfix restores **Get Codex login code** on the default HTTP Umbrel
+console after explicit trusted-network confirmation. It displays issued codes,
+including nine-digit codes, unchanged and requires OpenAI's HTTPS device page.
+It also separates binary/login readiness from generation-proof timeouts and fixes
+heartbeat acknowledgements overlapping login without losing cleanup obligations.
+API-key HTTPS/loopback restrictions, directories, networks and resource limits
+are unchanged. See [hotfix details](../../docs/codex.md#041-hotfix).
+
+The local tags are `evencomms:0.4.1` and `evencomms-codex:0.4.1`. Planned publication
+uses the same existing GHCR package for `ghcr.io/9vibes/evencomms:0.4.1` and
+`ghcr.io/9vibes/evencomms:0.4.1-codex`; these names are not proof of publication.
 Use KNS-Umbrel for a normal installation after verified image promotion; these
 development files do not update the live store automatically. The 0.3.0 features
 remain: OpenAI API Research, selected stills, 1x to 4x digital zoom/pan and LL-HLS
@@ -27,10 +36,10 @@ The `0.1.0` image lacks streaming; `0.2.1` uses ordinary fMP4 HLS.
 
 ## Stage Locally
 
-1. From the EVENCOMMS repository root, run `docker build -t evencomms:0.4.0 .`
-   and `docker build -f deploy/codex/Dockerfile -t evencomms-codex:0.4.0 .`
+1. From the EVENCOMMS repository root, run `docker build -t evencomms:0.4.1 .`
+   and `docker build -f deploy/codex/Dockerfile -t evencomms-codex:0.4.1 .`
    on the target host. The frontend and bridge packages and lockfiles must be present.
-2. If building elsewhere, use `docker save evencomms:0.4.0 evencomms-codex:0.4.0`
+2. If building elsewhere, use `docker save evencomms:0.4.1 evencomms-codex:0.4.1`
    and `docker load` to transfer both images to the Umbrel Docker daemon. Build for the target
    architecture; a tag alone does not make an image multi-architecture.
 3. Use these files only in a separate local/test Umbrel app staging area under
@@ -98,7 +107,9 @@ root, a 256 MiB `/tmp` tmpfs (`noexec,nosuid,nodev`), 1 GiB memory and total
 memory-plus-swap limit, one CPU, 128 PIDs, all capabilities dropped,
 `no-new-privileges`, and disabled core dumps. It has no `/data`, `/config`, host
 home, personal Codex cache or Docker socket mount. The health start period is
-90 seconds for the bounded 75-second startup proof. Neither `data_init` nor
+90 seconds for the separate 10-second binary check and 75-second generation proof.
+A generation-proof timeout does not discard verified binary/login readiness.
+Neither `data_init` nor
 `codex-bridge` receives `APP_PASSWORD`; only the backend maps it to `ADMIN_PASSWORD`.
 
 The application process runs as UID/GID `10001:10001`. A short-lived, networkless
@@ -140,9 +151,11 @@ origin, and whitelist the HTTPS backend origin in the Even package network
 permissions. Do not substitute `*` or disable origin checks.
 
 Umbrel's ordinary LAN HTTP URL may require its own explicit origin because the
-app proxy can rewrite Host. HTTP is only for isolated staging, not private
-phone conversations. TLS is a manual deployment prerequisite, not provisioned by
-the Codex service. Remote plain HTTP cannot initiate device sign-in in the UI.
+app proxy can rewrite Host. Prefer TLS for private conversations; it is not
+provisioned by the Codex service. HTTP device-code login is available after an
+explicit trusted-network confirmation, but operator tokens, codes and chat still
+cross that console connection unencrypted. Never use it on an untrusted/public
+network. API-key entry still requires HTTPS or exact localhost/loopback access.
 No Ollama service is installed and no cloud account is connected automatically.
 Set `OLLAMA_URL` to a reachable local service address on the appropriate Docker
 network or LAN; `127.0.0.1` inside this container is not the Umbrel host. Restrict
@@ -170,7 +183,8 @@ For **ChatGPT account (Experimental Codex)**, the service is already installed
 and privately authenticated by `CODEX_BRIDGE_TOKEN_FILE=/run/codex-auth/token`
 in both backend and bridge. Do not also set `CODEX_BRIDGE_TOKEN`: conflicting
 token sources are rejected. Do not put either secret in manifest/UI metadata.
-Choose this provider explicitly, sign in on OpenAI's device page, select a model
+Choose this provider explicitly, click **Get Codex login code**, enter the issued
+code on OpenAI's HTTPS device page, select a model
 and Send. Connecting and model selection never send questions or frames.
 
 An eligible plan/workspace is required; pinned models are not entitlement
@@ -193,20 +207,24 @@ actual Umbrel host still need acceptance testing over the intended TLS path.
    and Node 24; the bridge retains its pinned official Codex 0.157.1 dependency
    and binary hashes. Verify STT wheels, cold model download, cache reuse, private
    token provisioning/reuse and container isolation. Do not infer ARM64 or GPU support.
+   Before publication, require the digest-pinned 0.1.0, 0.2.1, 0.3.0 and 0.4.0 app
+   upgrade gates. The 0.4.0 check runs its old private-auth initializer first, then
+   requires the new initializer to preserve the token on the same volume; it does
+   not run a prior bridge image or simulate a live account migration.
 3. Require CI and the bridge's authenticated private `GET /ready` generation
    gate to pass, not just `/health`. Idle readiness must report verified binary,
    enabled generation and zero active account sessions after the synthetic probe.
-   Publish the exact tested images as `ghcr.io/9vibes/evencomms:0.4.0` and
-   `ghcr.io/9vibes/evencomms:0.4.0-codex` in the same existing public package.
+   Publish the exact tested images as `ghcr.io/9vibes/evencomms:0.4.1` and
+   `ghcr.io/9vibes/evencomms:0.4.1-codex` in the same existing public package.
    Confirm anonymous pulls of both digests and record the actual release run.
    The regular CI workflow does not publish.
 4. Only after verification, update the canonical KNS-Umbrel package: pin both
-   application/init references to `ghcr.io/9vibes/evencomms:0.4.0@sha256:<verified-app-digest>`
-   and the bridge to `ghcr.io/9vibes/evencomms:0.4.0-codex@sha256:<verified-codex-digest>`.
+   application/init references to `ghcr.io/9vibes/evencomms:0.4.1@sha256:<verified-app-digest>`
+   and the bridge to `ghcr.io/9vibes/evencomms:0.4.1-codex@sha256:<verified-codex-digest>`.
    Do not use `pull_policy: never` there. Keep these source templates local-only;
    never invent digests or promote local tags before publication.
-5. Verify upgrades from published prior images, including 0.3.0, then test
-   a clean pull/install and an in-place Umbrel update with existing data. Submit
+5. Test a clean pull/install and an in-place Umbrel update from 0.4.0 with existing
+   data and the private service token. Submit
    the canonical store update separately and record actual results, not assumed
    hardware or live-provider success.
 

@@ -5,17 +5,25 @@ only the Python standard library on the host; WebSocket checks run with the
 image's installed dependencies. It never pulls or rebuilds the supplied image.
 
 ```sh
-python scripts/container_smoke.py --image evencomms:0.4.0
-python scripts/container_smoke.py --image evencomms:0.4.0 --speech-pcm /tmp/speech.pcm
+python scripts/container_smoke.py --image evencomms:0.4.1
+python scripts/container_smoke.py --image evencomms:0.4.1 --speech-pcm /tmp/speech.pcm
 ```
 
 Add `--upgrade-from <local-prior-image>` to seed the data/model cache with an
 already-pulled prior image before starting the candidate image on the same
 volumes. The 0.3.0 release used separate digest-pinned 0.1.0 and 0.2.1 upgrade
-checks as well as a fresh candidate. The 0.4.0 release must also verify an upgrade
-from the published 0.3.0 image, preserving identity, settings, data and secrets.
-This describes required release checks, not a claim that the candidate's GitHub
-run passed or either image has been published.
+checks as well as a fresh candidate. The 0.4.1 workflow retains those gates and the
+0.3.0 upgrade, and adds the published 0.4.0 app pinned to
+`ghcr.io/9vibes/evencomms:0.4.0@sha256:0b22e2b2d2967e55f244985ebc16cdac3426c852527f83398dce7b639b5e6d15`.
+Only the 0.4.0 gate adds `--upgrade-private-auth`: it first runs that image's
+private-auth initializer on the same volumes, then the candidate's `INIT_CHECK`
+hashes the existing token internally and requires unchanged bytes and correct
+permissions across repeated initialization. The old app boots after candidate
+initialization, then the new app boots with its saved data. No prior bridge is
+started; this is old-to-new initializer/token preservation plus app/data upgrade,
+not a live-account migration or a full old-stack Umbrel installation test.
+Do not use that flag with 0.1.0/0.2.1/0.3.0: their legacy upgrade paths are unchanged
+and do not require a private-auth-capable initializer.
 The candidate's initializer is tested on both fresh and existing volumes,
 including literal managed-config installation and replacement of stale configs.
 Existing SQLite permissions are deliberately tightened to `0600`/UID 10001;
@@ -49,7 +57,7 @@ test. Model hosting/network failures fail the release rather than bypass STT.
 
 ## Real RTMP/HLS Smoke
 
-`stream_smoke.py` tests an **already running, isolated** 0.4.0 stack:
+`stream_smoke.py` tests an **already running, isolated** 0.4.1 stack:
 backend + public nginx ingress + MediaMTX. It never starts/rebuilds containers,
 changes settings, connects to a default preview URL, or stops an existing encoder.
 See [streaming deployment and API contracts](../docs/streaming.md). Use nginx's
@@ -220,7 +228,15 @@ locked npm assets and run the real-binary probe from the repository root:
 ```sh
 npm ci --prefix codex_bridge --ignore-scripts --no-audit --no-fund
 python scripts/check_codex_runtime.py --binary codex_bridge/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex --temp-parent /tmp
+PATH="$PWD/codex_bridge/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin:$PATH" python -m pytest backend/tests/test_codex_bridge.py -k offline_pinned_binary_device_login_uses_production_session
 ```
+
+The pytest command exercises the production `Session` device-login path with the
+real native binary and an offline nine-digit code fixture, not a mocked runtime
+or real OpenAI account. It requires the pinned binary on `PATH`; otherwise the
+normal backend suite skips this one test. The dedicated Codex CI job installs the
+locked assets and explicitly sets `PATH` before running it, so its result must be
+a pass rather than a skip.
 
 The probe uses loopback OAuth and Responses fixtures. It checks digest/schema,
 ephemeral synthetic login, both pinned model selectors, zero tool registration,
@@ -234,7 +250,7 @@ all positive safety proofs, not a claim that real-account access is verified.
 The isolated service repeats this probe before enabling generation at startup.
 Never bypass a failed proof by changing the protocol policy or enabling tools.
 
-In the 0.4.0 Umbrel source package, the isolated service starts idle by default;
+In the Umbrel source package, the isolated service starts idle by default;
 standalone still requires the explicit `compose.codex.yml` overlay. Startup
 launches synthetic loopback probe processes, not a real account login/inference.
 No account use is permitted before Research provider choice, device sign-in,
@@ -245,12 +261,16 @@ Container verification must check the **running service's** authenticated privat
 `GET /ready`, not just `/health` or an earlier probe subprocess result. Assert
 verified binary, enabled generation and zero active account sessions after the
 startup probe. Readiness must not expose credentials or initiate account use.
-The 75-second proof deadline fits within the 90-second health start period.
+The separate 10-second binary verification and 75-second generation-proof
+deadlines fit within the 90-second health start period. Generation-proof failure
+or timeout preserves independently verified device-login readiness, but Send
+stays disabled without the complete proof.
 Verify UID/GID `10002:10002`, read-only root, 256 MiB noexec/nosuid/nodev tmpfs,
 1 GiB memory and total memory-plus-swap, one CPU, 128 PIDs, no capabilities or
 privilege escalation, disabled core dumps, rotated logs, no published ports and
-the private-link/separate-egress networks. A failed gate must disable Codex, not
-trigger a provider/model/API fallback or prevent the ordinary app from starting.
+the private-link/separate-egress networks. A failed gate must disable Codex
+generation, not trigger a provider/model/API fallback or prevent the ordinary app
+from starting.
 
 Umbrel's initializer uses `--codex-auth-dir /codex-auth` alongside
 `--config-dir /config`. Check a persistent random 64-hex `token`, directory/file ownership
@@ -273,7 +293,7 @@ identities and their source revision:
 ```sh
 python scripts/codex_container_smoke.py \
   --image "$APP_IMAGE_ID" --codex-image "$CODEX_IMAGE_ID" \
-  --version 0.4.0 --revision "$REVISION" \
+  --version 0.4.1 --revision "$REVISION" \
   --source https://github.com/9vibes/EVENCOMMS --browser
 ```
 
@@ -290,10 +310,13 @@ These are synthetic checks, not live-account login, inference or entitlement tes
 
 ## Publication
 
-The source version is **0.4.0**, a candidate with Codex still **experimental**.
-The GitHub release page and canonical KNS-Umbrel package record actual published
-image references and verification results. Local `evencomms:0.4.0` and
-`evencomms-codex:0.4.0` are not registry references. After each release run, record
+The source version is **0.4.1**, a [device-login hotfix](../docs/codex.md#041-hotfix)
+for Codex Research introduced in 0.4.0; Codex remains **experimental**.
+The [release page](https://github.com/9vibes/EVENCOMMS/releases),
+[CI runs](https://github.com/9vibes/EVENCOMMS/actions) and canonical
+[KNS-Umbrel package](https://github.com/9vibes/KNS-Umbrel/tree/master/kunas-evencomms)
+record actual publication and verification status. Local `evencomms:0.4.1` and
+`evencomms-codex:0.4.1` are not registry references. After each release run, record
 its actual outcome and both verified digests rather than inferring success from
 this checklist. Live OpenAI and physical-device acceptance are not established
 by these scripts.
@@ -308,18 +331,19 @@ not the application's SemVer. Stable SemVer
 and SemVer prereleases are supported, but build metadata is rejected because
 Docker tags cannot contain `+`. No source tags are created or changed.
 
-The 0.4.0 release plan builds **linux/amd64 only** on Ubuntu 24.04, labels both
+The 0.4.1 release workflow builds **linux/amd64 only** on Ubuntu 24.04, labels both
 images with source, revision and version, smoke-tests the app's exact local image
 ID with real CPU STT, and verifies the isolated bridge's actual generation gate.
 Only the exact tested images may be published using `GITHUB_TOKEN` with
 `packages: write`. Both tags belong to the **same existing public GHCR package**:
 
-- App/init: `ghcr.io/9vibes/evencomms:0.4.0` (`:<version>`).
-- Bridge: `ghcr.io/9vibes/evencomms:0.4.0-codex` (`:<version>-codex`).
+- App/init: `ghcr.io/9vibes/evencomms:0.4.1` (`:<version>`).
+- Bridge: `ghcr.io/9vibes/evencomms:0.4.1-codex` (`:<version>-codex`).
 
 Do not create a separate registry package for the bridge. There are no `latest`,
 moving minor-version or ARM tags. Official Codex `0.157.1` dependencies and binary
 hashes are unchanged by this app version bump.
+Do not retag or replace either published 0.4.0 image.
 
 Publication is serialized. An authenticated registry check rejects existing
 tags for both images and fails closed on authentication, network, and unexpected registry

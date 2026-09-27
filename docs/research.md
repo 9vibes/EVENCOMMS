@@ -6,19 +6,21 @@ glasses. No continuous video, audio, stream key, or unsent wearer draft is sent 
 OpenAI. Capturing a frame only adds a local draft attachment; Send is explicit.
 
 This page describes the **OpenAI API key** connection introduced in 0.3.0 and
-retained as the default in the 0.4.0 source candidate. The **ChatGPT account
+retained as the default in 0.4.1. The **ChatGPT account
 (Experimental Codex)** option has separate authentication, eligible-plan allowance
 and retention behavior. It remains experimental, with no model-entitlement
 guarantee. See [its setup and privacy guide](codex.md).
 Switching providers clears the local conversation after confirmation; it never
 replays history to a different provider or silently falls back to API billing.
 
-The 0.4.0 Umbrel source package includes an isolated idle bridge and automatically
+Since 0.4.0, the Umbrel source package includes an isolated idle bridge and automatically
 provisions its private service token, not an account login. Startup runs synthetic
 loopback probes only; actual account use requires provider choice, device login,
 an explicit model and Send. Standalone deployments require `compose.codex.yml`
 and a private `.env` service token. A failed bridge does not block API Research or
 other app features. Existing optional API keys and user overrides are unchanged.
+The 0.4.1 trusted-network HTTP device-login confirmation is Codex-only; API-key
+entry still requires HTTPS or exact localhost/loopback.
 
 ## Connection And Privacy
 
@@ -145,6 +147,6 @@ These checks do not verify a live OpenAI account, model compatibility, billing o
 retention. Native Safari and physical glasses/phone acceptance remain unverified.
 See [the smoke guide](../scripts/README.md#research-real-frame-browser-smoke).
 Consult the [GitHub release page](https://github.com/9vibes/EVENCOMMS/releases) for
-historical 0.3.0 publication results and actual 0.4.0 candidate verification.
+published image references and verification results for each release.
 Source features and synthetic Codex tests are not proof of successful release CI,
 a published image, a live-account test or an Umbrel installation.

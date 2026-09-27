@@ -100,7 +100,7 @@ class Runtime:
                 raise
             self.reader = asyncio.create_task(self.read_loop())
             result = await self.call("initialize", {
-                "clientInfo": {"name": "evencomms_codex_bridge", "title": "EVENCOMMS Research Prototype", "version": "0.4.0"},
+                "clientInfo": {"name": "evencomms_codex_bridge", "title": "EVENCOMMS Research Prototype", "version": "0.4.1"},
                 "capabilities": {"experimentalApi": True},
             })
             if not isinstance(result, dict) or VERSION not in result.get("userAgent", ""):

@@ -1398,11 +1398,165 @@ def test_lease_ack_renews_only_subset_and_immediately_releases_missing_capacity(
     assert not any(request.method == "DELETE" for request in calls)
 
 
-@pytest.mark.parametrize("operation", ["login", "chat"])
-def test_missing_lease_ack_cancels_and_discards_stale_reply(make_codex, operation):
+@pytest.mark.parametrize("lease_before_login", [False, True])
+@pytest.mark.parametrize("login_before_ack", [False, True])
+def test_missing_lease_ack_before_or_during_login_cannot_reap_creation(
+        make_codex, lease_before_login, login_before_ack):
     client, headers, calls = make_codex()
-    if operation == "chat":
+    if lease_before_login:
         connect(client, headers)
+
+    async def exercise():
+        research = client.app.state.codex_research
+        session = research.session(parent(headers), create=True)
+        deadline = session.lease_until
+        now = research.credentials.now()
+        research.credentials.now = lambda: now + LEASE_INTERVAL
+        login_entered, lease_entered = asyncio.Event(), asyncio.Event()
+        create, acknowledge = asyncio.Event(), asyncio.Event()
+        # A previous acknowledged session has already been reaped in the relogin case.
+        remote = set()
+
+        async def handler(request):
+            calls.append(request)
+            if request.url.path == "/lease":
+                renewed = sorted(remote.intersection(json.loads(request.content)["sessions"]))
+                lease_entered.set()
+                await acknowledge.wait()
+                return httpx.Response(200, json={"sessions": renewed})
+            identity = request.url.path.split("/")[2]
+            if request.url.path.endswith("/login"):
+                login_entered.set()
+                await create.wait()
+                remote.add(identity)
+            elif request.method == "DELETE":
+                remote.discard(identity)
+            return bridge(request)
+
+        research.client._transport = httpx.MockTransport(handler)
+        research.lifecycle_client._transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=client.app), base_url="http://testserver") as api:
+            pending = renewing = None
+            try:
+                if lease_before_login:
+                    renewing = asyncio.create_task(research.renew_leases())
+                    await asyncio.wait_for(lease_entered.wait(), 1)
+                pending = asyncio.create_task(api.post(ROOT + "/login", headers=headers, json={}))
+                await asyncio.wait_for(login_entered.wait(), 1)
+                if not lease_before_login:
+                    renewing = asyncio.create_task(research.renew_leases())
+                    await asyncio.wait_for(lease_entered.wait(), 1)
+                assert session.started and not remote
+                if login_before_ack:
+                    create.set()
+                    response = await asyncio.wait_for(pending, 1)
+                    assert response.status_code == 200
+                acknowledge.set()
+                await asyncio.wait_for(renewing, 1)
+                assert research.sessions.get(parent(headers)) is session
+                assert session.lease_until == deadline
+                assert not research.retired and not research.cleanups
+                if not login_before_ack:
+                    assert not pending.done() and not research.tasks[parent(headers)].done()
+                    create.set()
+                    response = await asyncio.wait_for(pending, 1)
+                assert response.status_code == 200 and response.json() == {"enabled": True, **status()}
+                assert all(private not in response.text for private in (session.identity, TOKEN, SECRET))
+                assert remote == {session.identity} and not research.tasks
+                await research.renew_leases()
+                assert session.lease_until == now + LEASE_INTERVAL + LEASE_TTL
+                remote.clear()
+                await research.renew_leases()
+                assert not research.sessions and not research.retired and not research.cleanups
+                assert not any(request.method == "DELETE" for request in calls)
+            finally:
+                create.set()
+                acknowledge.set()
+                await asyncio.gather(*(task for task in (pending, renewing) if task), return_exceptions=True)
+                await asyncio.gather(*research.cleanups.values())
+
+    client.portal.call(exercise)
+
+
+@pytest.mark.parametrize("action,expected", [("logout", 401), ("disconnect", 409)])
+def test_missing_lease_ack_preserves_late_login_cleanup_and_capacity(make_codex, action, expected):
+    client, one, calls = make_codex()
+    two, three = login(client), login(client)
+
+    async def exercise():
+        research = client.app.state.codex_research
+        entered, cancelled, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        deleted = asyncio.Queue()
+        remote = set()
+
+        async def handler(request):
+            calls.append(request)
+            if request.url.path == "/lease":
+                return httpx.Response(200, json={
+                    "sessions": sorted(remote.intersection(json.loads(request.content)["sessions"]))})
+            identity = request.url.path.split("/")[2]
+            if request.url.path.endswith("/login"):
+                if not entered.is_set():
+                    entered.set()
+                    try:
+                        await release.wait()
+                    except asyncio.CancelledError:
+                        cancelled.set()
+                        await release.wait()
+                remote.add(identity)
+            elif request.method == "DELETE":
+                remote.discard(identity)
+                deleted.put_nowait(identity)
+            return bridge(request)
+
+        research.client._transport = httpx.MockTransport(handler)
+        research.lifecycle_client._transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=client.app), base_url="http://testserver") as api:
+            pending = asyncio.create_task(api.post(ROOT + "/login", headers=one, json={}))
+            try:
+                await asyncio.wait_for(entered.wait(), 1)
+                old = research.session(parent(one))
+                deadline = old.lease_until
+                now = research.credentials.now()
+                research.credentials.now = lambda: now + LEASE_INTERVAL
+                await research.renew_leases()
+                assert research.sessions.get(parent(one)) is old and not cancelled.is_set()
+                assert old.lease_until == deadline and not remote
+                assert (await api.post(ROOT + "/login", headers=two, json={})).status_code == 200
+                assert (await api.post(ROOT + "/login", headers=three, json={})).status_code == 429
+                if action == "logout":
+                    assert (await api.post("/api/logout", headers=one)).status_code == 204
+                else:
+                    assert (await api.delete(ROOT + "/connection", headers=one)).json() == disconnected()
+                await asyncio.wait_for(cancelled.wait(), 1)
+                assert await asyncio.wait_for(deleted.get(), 1) == old.identity
+                assert old.identity not in remote and old.identity in research.retired
+                assert parent(one) in research.tasks and not research.tasks[parent(one)].done()
+                assert len(research.sessions) + len(research.retired) == 2
+                assert (await api.post(ROOT + "/login", headers=three, json={})).status_code == 429
+                if action == "disconnect":
+                    assert (await api.post(ROOT + "/login", headers=one, json={})).status_code == 429
+                release.set()
+                response = await asyncio.wait_for(pending, 1)
+                assert response.status_code == expected
+                assert all(private not in response.text for private in (old.identity, TOKEN, SECRET))
+                await asyncio.gather(*research.cleanups.values())
+                assert await asyncio.wait_for(deleted.get(), 1) == old.identity
+                assert deleted.empty() and old.identity not in remote
+                assert not research.retired and not research.cleanups and not research.tasks
+                assert (await api.post(ROOT + "/login", headers=three, json={})).status_code == 200
+                assert len(remote) == len(research.sessions) == 2
+            finally:
+                release.set()
+                await asyncio.gather(pending, return_exceptions=True)
+                await asyncio.gather(*research.cleanups.values())
+
+    client.portal.call(exercise)
+
+
+def test_missing_lease_ack_cancels_chat_and_discards_stale_reply(make_codex):
+    client, headers, calls = make_codex()
+    connect(client, headers)
 
     async def exercise():
         research = client.app.state.codex_research
@@ -1412,7 +1566,7 @@ def test_missing_lease_ack_cancels_and_discards_stale_reply(make_codex, operatio
             calls.append(request)
             if request.url.path == "/lease":
                 return httpx.Response(200, json={"sessions": []})
-            if request.url.path.endswith("/" + operation):
+            if request.url.path.endswith("/chat"):
                 entered.set()
                 try:
                     await asyncio.Event().wait()
@@ -1423,8 +1577,7 @@ def test_missing_lease_ack_cancels_and_discards_stale_reply(make_codex, operatio
         research.client._transport = httpx.MockTransport(handler)
         research.lifecycle_client._transport = httpx.MockTransport(handler)
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=client.app), base_url="http://testserver") as api:
-            pending = asyncio.create_task(api.post(ROOT + "/" + operation, headers=headers,
-                json=payload() if operation == "chat" else {}))
+            pending = asyncio.create_task(api.post(ROOT + "/chat", headers=headers, json=payload()))
             try:
                 await asyncio.wait_for(entered.wait(), 1)
                 old = research.session(parent(headers))

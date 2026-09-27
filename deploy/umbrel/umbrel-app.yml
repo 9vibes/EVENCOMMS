@@ -3,11 +3,11 @@ id: kunas-evencomms
 name: EVENCOMMS
 tagline: Local conversations between Even glasses and an operator
 category: social
-version: "0.4.0"
+version: "0.4.1"
 port: 28097
 description: >-
-  STAGING PACKAGE ONLY. The 0.4.0 candidate requires local source builds of
-  evencomms:0.4.0 and evencomms-codex:0.4.0; use KNS-Umbrel for the
+  SOURCE STAGING PACKAGE. The 0.4.1 device-login hotfix uses local source builds of
+  evencomms:0.4.1 and evencomms-codex:0.4.1; use KNS-Umbrel for the
   digest-pinned installable release package and check actual release results.
   Pair an Even Hub client with a
   browser operator, transcribe short English utterances locally on CPU,
@@ -34,19 +34,33 @@ description: >-
   workspace policies and data controls apply. No automatic API, provider or model
   fallback. Two signed-in operators and eight sends per login bound RAM use.
   A private service token is provisioned automatically, separately from the app
-  password; OAuth credentials are not persisted. Configure TLS manually for remote
-  sign-in and private conversations. Codex adds no public ports and its health
+  password; OAuth credentials are not persisted. Prefer manually configured TLS
+  for private conversations. HTTP device-code login requires a trusted-network
+  confirmation; console traffic remains unencrypted. Enter the issued code only
+  on OpenAI's HTTPS page. API-key entry still requires HTTPS or exact loopback.
+  Codex adds no public ports and its health
   does not gate ordinary app startup.
 developer: EVENCOMMS contributors
 dependencies: []
 defaultUsername: ""
 deterministicPassword: true
 releaseNotes: >-
-  0.4.0 candidate adds experimental Codex Research through the official pinned
-  Codex 0.157.1 runtime and an isolated bridge. API mode remains the UI default;
-  existing optional OpenAI keys and settings remain unchanged. Rebuild/redeploy
-  the full stack, including both images. Initialization installs bundled nginx
-  and MediaMTX configs and creates the private codex-auth/token once. Back up
+  0.4.1 fixes device login for experimental Codex Research introduced in 0.4.0.
+  Get Codex login code is available on the default HTTP Umbrel console after an
+  explicit trusted-network confirmation. This is Codex-only; API-key entry still
+  requires HTTPS or exact localhost/loopback, and console HTTP remains unencrypted.
+  Enter the actual issued code only on OpenAI's HTTPS device page. Codes, including
+  nine-digit codes, are displayed unchanged, never fabricated or restricted to
+  exactly nine digits. Independent 10-second binary verification preserves login
+  readiness if the 75-second generation proof fails or times out; generation still
+  requires the complete safety proof. Overlapping heartbeat acknowledgements no
+  longer cancel unacknowledged logins or lose their cleanup obligations.
+  Official Codex 0.157.1 and its binary hashes are unchanged. The existing bridge
+  stays installed and idle, with account use opt-in. No new directories, networks,
+  ports or resource-limit changes. API mode remains the UI default; existing
+  optional OpenAI keys and settings remain unchanged. Rebuild/redeploy the full
+  stack, including both 0.4.1 images, without retagging 0.4.0. Initialization installs
+  bundled nginx and MediaMTX configs and preserves the existing private token. Back up
   codex-auth alongside app data, never account tokens. Update in place, preserving
   app ID, web port 28097, RTMP port 21936, password, user data, model cache and stream secrets.
   API sign-in keys are server-RAM-only and clear on logout, expiry, explicit
@@ -59,4 +73,4 @@ releaseNotes: >-
   This manifest does not establish successful CI or publication. Tests use
   MockTransport/browser stubs and synthetic Codex probes, not live account verification.
   Native Safari LL-HLS, physical glasses/phones and target-host acceptance remain
-  unverified; deployed browser access requires TLS.
+  unverified; prefer TLS for private console traffic and require it for phone deployment.

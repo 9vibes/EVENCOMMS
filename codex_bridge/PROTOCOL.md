@@ -86,7 +86,10 @@ requires an explicitly supplied model, and the UI's explicit selection behavior
 is unchanged. `model_proofs` must contain a successful tools/history/images
 one-shot for every exposed ID; missing or failed model coverage disables
 generation. The per-model smoke tests add only one extra sequential runtime to
-the existing recovery suite; the service's 75-second startup timeout remains.
+the existing recovery suite; the generation proof's 75-second timeout remains.
+The service independently verifies the binary off the event loop with a
+10-second deadline first. A generation-probe timeout cannot erase that binary
+verification or block device login; generation still needs the complete proof.
 
 The gate also requires binary/schema verification, ephemeral credentials,
 unexpected tool-call rejection, HTTP-500 behavior, revocation handling, fixture

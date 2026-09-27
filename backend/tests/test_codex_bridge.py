@@ -4,14 +4,17 @@ import asyncio
 import base64
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
+import contextlib
 import copy
 import io
 import json
 import logging
 from pathlib import Path
+import shutil
 import sys
 import threading
-from uuid import uuid4
+from urllib.parse import parse_qs
+from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -26,7 +29,7 @@ from codex_bridge.policy import (
 from codex_bridge.probe import verify_binary
 from codex_bridge.rpc import ProtocolError, Runtime, WIRE_LIMIT, child_environment
 from codex_bridge.relay import Budget, Relay, Rejected, UPSTREAM
-from codex_bridge.service import DEVICE_URL, create_app
+from codex_bridge.service import Bridge, DEVICE_URL, create_app
 from codex_bridge.validation import BODY_LIMIT, Chat
 
 
@@ -216,7 +219,7 @@ def bridge_client(tmp_path):
     async def probe(*args, **kwargs):
         return probe_result
 
-    app = create_app(token=TOKEN, runtime_factory=factory, probe=probe,
+    app = create_app(token=TOKEN, runtime_factory=factory, probe=probe, _verify_binary=lambda binary: None,
                      temp_parent=str(tmp_path), clock=lambda: now[0])
     with TestClient(app) as client:
         client.headers.update(AUTH)
@@ -250,7 +253,8 @@ def test_token_accepts_inclusive_backend_bounds(tmp_path, token):
     async def probe(*args, **kwargs):
         return passing_report()
 
-    app = create_app(token=token, runtime_factory=MockRuntime, probe=probe, temp_parent=str(tmp_path))
+    app = create_app(token=token, runtime_factory=MockRuntime, probe=probe, temp_parent=str(tmp_path),
+                     _verify_binary=lambda binary: None)
     with TestClient(app, headers={"Authorization": "Bearer " + token}) as client:
         assert client.get(BASE + "/status").status_code == 200
 
@@ -265,7 +269,8 @@ def test_bridge_reads_file_at_startup_only_and_keeps_cached_credential(tmp_path,
         return passing_report()
 
     # Construction must not read the file; it may be provisioned before startup.
-    app = create_app(probe=probe, runtime_factory=MockRuntime, temp_parent=str(tmp_path))
+    app = create_app(probe=probe, runtime_factory=MockRuntime, temp_parent=str(tmp_path),
+                     _verify_binary=lambda binary: None)
     path.write_text(TOKEN + "\n")
     path.chmod(0o440)
     with TestClient(app, headers=AUTH) as client:
@@ -289,7 +294,7 @@ def test_bridge_standalone_direct_token_does_not_read_files(monkeypatch):
     async def probe(*args, **kwargs):
         return passing_report()
 
-    with TestClient(create_app(probe=probe), headers=AUTH) as client:
+    with TestClient(create_app(probe=probe, _verify_binary=lambda binary: None), headers=AUTH) as client:
         assert client.get("/ready").json()["generation_enabled"] is True
 
 
@@ -343,8 +348,9 @@ def test_auth_health_origins_and_private_surface(bridge_client):
     assert not client.runtimes
 
 
-@pytest.mark.parametrize("fault", [None, "generation_enabled", "proof", "binary_verified", "exception"])
-def test_ready_reports_only_consumed_startup_gate(tmp_path, fault):
+@pytest.mark.parametrize("fault", [None, "generation_enabled", "proof", "binary_verified", "exception", "timeout", "malformed"])
+def test_ready_reports_only_consumed_startup_gate(tmp_path, monkeypatch, fault):
+    monkeypatch.setattr("codex_bridge.service.PROBE_SECONDS", 0.03)
     report = passing_report()
     report.update(email="private@example.invalid", credential=TOKEN, blocker="private probe diagnostics")
     if fault in {"generation_enabled", "binary_verified"}:
@@ -353,20 +359,27 @@ def test_ready_reports_only_consumed_startup_gate(tmp_path, fault):
         report["tool_continuation_guarded"] = False
     probes = []
 
+    def verifier(binary):
+        probes.append("binary")
+
     async def probe(*args, **kwargs):
-        probes.append(True)
+        probes.append("generation")
         if fault == "exception":
             raise RuntimeError("private probe diagnostics " + TOKEN)
+        if fault == "timeout":
+            await asyncio.Event().wait()
+        if fault == "malformed":
+            return None
         return report
 
-    app = create_app(token=TOKEN, runtime_factory=MockRuntime, probe=probe, temp_parent=str(tmp_path))
+    app = create_app(token=TOKEN, runtime_factory=MockRuntime, probe=probe, temp_parent=str(tmp_path),
+                     _verify_binary=verifier)
     with TestClient(app) as client:
         health = client.get("/health")
         assert health.status_code == 200 and health.json() == {"ok": True}
         assert client.get("/ready").status_code == 401
         response = client.get("/ready", headers=AUTH)
-        verified = fault not in {"binary_verified", "exception"}
-        expected = {"binary_verified": verified, "generation_enabled": fault is None, "active_sessions": 0}
+        expected = {"binary_verified": True, "generation_enabled": fault is None, "active_sessions": 0}
         assert response.status_code == 200 and response.json() == expected
         assert response.headers["cache-control"] == "no-store"
         assert TOKEN not in response.text and "private" not in response.text
@@ -375,17 +388,94 @@ def test_ready_reports_only_consumed_startup_gate(tmp_path, fault):
         report.clear()
         assert client.get("/ready", headers=AUTH).json() == expected
         result = client.post(BASE + "/login", headers=AUTH)
-        if verified:
-            assert result.json()["state"] == "pending"
-            session = app.state.bridge.sessions[SID]
-            client.portal.call(session.runtime.complete)
-            assert client.get("/ready", headers=AUTH).json() == {**expected, "active_sessions": 1}
-            assert client.post(BASE + "/chat", headers=AUTH, json=chat()).status_code == (200 if fault is None else 503)
-            client.delete(BASE, headers=AUTH)
-        else:
-            assert result.status_code == 503
+        assert result.status_code == 200 and result.json()["state"] == "pending"
+        session = app.state.bridge.sessions[SID]
+        client.portal.call(session.runtime.complete)
+        assert client.get(BASE + "/status", headers=AUTH).json()["state"] == "connected"
+        assert client.get("/ready", headers=AUTH).json() == {**expected, "active_sessions": 1}
+        assert client.post(BASE + "/chat", headers=AUTH, json=chat()).status_code == (200 if fault is None else 503)
+        if fault is not None:
+            assert not any(method == "thread/start" for method, _ in session.runtime.calls)
+        client.delete(BASE, headers=AUTH)
         assert client.get("/ready", headers=AUTH).json() == expected
-        assert probes == [True]
+        assert probes == ["binary", "generation"]
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_startup_rejects_unpinned_or_missing_binary_before_probe_or_runtime(tmp_path, missing):
+    async def probe(*args, **kwargs):
+        pytest.fail("An unverified binary must not run even the generation probe")
+
+    def factory(*args, **kwargs):
+        pytest.fail("An unverified binary must not create a runtime")
+
+    app = create_app(token=TOKEN, binary=str(tmp_path / "missing") if missing else __file__,
+                     probe=probe, runtime_factory=factory, temp_parent=str(tmp_path))
+    with TestClient(app, headers=AUTH) as client:
+        assert client.get("/ready").json() == {
+            "binary_verified": False, "generation_enabled": False, "active_sessions": 0,
+        }
+        assert client.post(BASE + "/login").status_code == 503
+        assert not app.state.bridge.sessions
+
+
+@pytest.mark.parametrize("times_out", [False, True])
+def test_startup_binary_verification_is_off_loop_bounded_and_cannot_enable_late(tmp_path, monkeypatch, times_out):
+    monkeypatch.setattr("codex_bridge.service.BINARY_VERIFY_SECONDS", 0.1)
+
+    async def run():
+        loop = asyncio.get_running_loop()
+        entered = asyncio.Event()
+        release, finished = threading.Event(), threading.Event()
+        threads, probes = [], []
+
+        def verifier(binary):
+            threads.append(threading.get_ident())
+            loop.call_soon_threadsafe(entered.set)
+            try:
+                assert release.wait(2)
+            finally:
+                finished.set()
+
+        async def probe(*args, **kwargs):
+            assert finished.is_set()
+            probes.append(True)
+            return passing_report()
+
+        def factory(*args, **kwargs):
+            pytest.fail("No runtime should be created")
+
+        app = create_app(token=TOKEN, runtime_factory=factory, probe=probe, _verify_binary=verifier,
+                         temp_parent=str(tmp_path))
+        expected = {"binary_verified": not times_out, "generation_enabled": not times_out, "active_sessions": 0}
+
+        async def startup():
+            async with app.router.lifespan_context(app):
+                async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://bridge", headers=AUTH) as client:
+                    assert (await client.get("/ready")).json() == expected
+                    if times_out:
+                        assert not release.is_set()
+                        assert (await client.post(BASE + "/login")).status_code == 503
+                    release.set()
+                    assert await asyncio.to_thread(finished.wait, 1)
+                    assert (await client.get("/ready")).json() == expected
+
+        task = asyncio.create_task(startup())
+        try:
+            async with asyncio.timeout(1):
+                await entered.wait()
+                assert len(threads) == 1 and threads[0] != threading.get_ident()
+                if not times_out:
+                    release.set()
+                await task
+            assert probes == ([] if times_out else [True])
+        finally:
+            release.set()
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(run())
 
 
 def test_login_idempotent_readiness_and_account_redaction(bridge_client):
@@ -447,7 +537,7 @@ def test_bad_device_results_fail_closed(bridge_client, field, value):
     assert client.runtimes[0].closed
 
 
-@pytest.mark.parametrize("code", ["cOdE-12345", "Z", "a" * 32, "AB-cd-"])
+@pytest.mark.parametrize("code", ["123456789", "cOdE-12345", "Z", "a" * 32, "AB-cd-"])
 def test_device_codes_are_bounded_case_preserving_and_match_backend(bridge_client, code):
     client = bridge_client
     original = client.app.state.bridge.runtime_factory
@@ -461,6 +551,150 @@ def test_device_codes_are_bounded_case_preserving_and_match_backend(bridge_clien
     result = client.post(BASE + "/login").json()
     assert result["state"] == "pending" and result["user_code"] == code
     assert result["verification_url"] == "https://auth.openai.com/codex/device"
+
+
+@pytest.mark.parametrize("fault", ["mismatch", "invalid_uuid", "duplicate", "expired", "incompatible_success", "unknown_event"])
+def test_invalid_or_stale_login_completions_fail_closed(bridge_client, fault):
+    client = bridge_client
+    client.post(BASE + "/login")
+    session = client.app.state.bridge.sessions[SID]
+    runtime = client.runtimes[0]
+    params = {"loginId": runtime.identity, "success": True}
+    if fault == "expired":
+        client.now[0] += 901
+        assert client.get(BASE + "/status").json() == DISCONNECTED
+    elif fault == "mismatch":
+        params["loginId"] = str(uuid4())
+    elif fault == "invalid_uuid":
+        params["loginId"] = "not-a-uuid"
+    elif fault == "incompatible_success":
+        params["success"] = 1
+
+    async def notify():
+        if fault == "duplicate":
+            runtime.event("account/login/completed", params)
+        with pytest.raises(ProtocolError):
+            runtime.event("unknown/login/event" if fault == "unknown_event" else "account/login/completed", params)
+        assert session.status() == {**DISCONNECTED, "state": "failed"}
+
+    client.portal.call(notify)
+    assert client.get(BASE + "/status").json() == DISCONNECTED
+    assert runtime.failed and runtime.closed
+
+
+def test_offline_pinned_binary_device_login_uses_production_session(tmp_path, monkeypatch):
+    binary = shutil.which("codex")
+    if binary is None:
+        pytest.skip("Put the pinned native Codex binary on PATH to run the offline integration")
+
+    async def run():
+        async with asyncio.timeout(10):
+            await asyncio.to_thread(verify_binary, binary)
+        approved, polled = asyncio.Event(), asyncio.Event()
+        polls, exchanges, errors = [], [], []
+        handlers = set()
+
+        async def respond(reader, writer):
+            handlers.add(asyncio.current_task())
+            try:
+                async with asyncio.timeout(5):
+                    lines = (await reader.readuntil(b"\r\n\r\n")).decode("ascii").split("\r\n")
+                    headers = {key.lower(): value.strip() for key, value in
+                               (line.split(":", 1) for line in lines[1:] if ":" in line)}
+                    size = int(headers.get("content-length", "0"))
+                    assert 0 <= size <= 65536
+                    raw = await reader.readexactly(size)
+                    method, path, _ = lines[0].split(" ")
+                    path = path.split("?", 1)[0]
+                    status, value = b"200 OK", {}
+                    if method == "POST" and path == "/api/accounts/deviceauth/usercode":
+                        value = {"device_auth_id": "offline-device", "user_code": "123456789", "interval": "1"}
+                    elif method == "POST" and path == "/api/accounts/deviceauth/token":
+                        assert json.loads(raw) == {"device_auth_id": "offline-device", "user_code": "123456789"}
+                        if approved.is_set():
+                            value = {"authorization_code": "offline-code", "code_challenge": "offline", "code_verifier": "offline"}
+                        else:
+                            status = b"403 Forbidden" if len(polls) % 2 == 0 else b"404 Not Found"
+                            polls.append(int(status[:3]))
+                            if len(polls) >= 3:
+                                polled.set()
+                    elif method == "POST" and path == "/oauth/token":
+                        grant = (json.loads(raw) if headers.get("content-type", "").startswith("application/json")
+                                 else {key: values[0] for key, values in parse_qs(raw.decode()).items()})
+                        assert approved.is_set() and grant["grant_type"] == "authorization_code" and not exchanges
+                        exchanges.append(True)
+                        claims = {"email": "offline@example.invalid", "https://api.openai.com/auth": {
+                            "chatgpt_user_id": "offline-user", "chatgpt_account_id": "offline-account", "chatgpt_plan_type": "pro"}}
+                        token = "e30." + base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=") + ".offline"
+                        value = {"id_token": token, "access_token": "offline-access", "refresh_token": "offline-refresh"}
+                    elif method == "GET" and path.endswith("/accounts/check"):
+                        value = {"accounts": [{"id": "offline-account", "workspace_backend_origin": origin.replace("http:", "https:"),
+                                              "account_routing_override": "NO_CONSTRAINT"}]}
+                    elif method == "POST" and path == "/oauth/revoke":
+                        pass
+                    elif method == "GET" and path.endswith(("/config/bundle", "/settings/user")):
+                        pass
+                    else:
+                        raise AssertionError("Unexpected offline fixture request")
+                    body = json.dumps(value).encode()
+                    writer.write(b"HTTP/1.1 " + status + b"\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: "
+                                 + str(len(body)).encode() + b"\r\n\r\n" + body)
+                    await writer.drain()
+            except (ConnectionError, asyncio.IncompleteReadError):
+                pass
+            except Exception:
+                errors.append("fixture rejected request")
+            finally:
+                writer.close()
+                with contextlib.suppress(Exception):
+                    await writer.wait_closed()
+                handlers.discard(asyncio.current_task())
+
+        server = await asyncio.start_server(respond, "127.0.0.1", 0)
+        origin = "http://127.0.0.1:" + str(server.sockets[0].getsockname()[1])
+        # The native fixture issuer changes only the expected verification URL;
+        # Session.login and its strict event callback are otherwise unmodified.
+        monkeypatch.setattr("codex_bridge.service.DEVICE_URL", origin + "/codex/device")
+
+        def factory(binary, on_event, **kwargs):
+            return Runtime(binary, on_event, probe_origin=origin, probe_upstream=origin,
+                           probe_config={"chatgpt_base_url": origin, "openai_base_url": origin}, **kwargs)
+
+        bridge = Bridge(binary, runtime_factory=factory, temp_parent=str(tmp_path), binary_verified=True)
+        try:
+            async with asyncio.timeout(30):
+                pending = await bridge.login(SID)
+                assert pending == {"state": "pending", "verification_url": origin + "/codex/device",
+                                   "user_code": "123456789", "generation_enabled": False}
+                session = bridge.sessions[SID]
+                runtime = session.runtime
+                process = runtime.process
+                directory = Path(runtime.directory.name)
+                assert runtime.on_event == session.event
+                assert str(UUID(session.login_id)) == session.login_id
+                await polled.wait()
+                assert polls[:3] == [403, 404, 403] and not exchanges
+                assert not session.login_task.done() and not session.login_done.is_set()
+                assert session.status() == pending and await bridge.login(SID) == pending
+                assert not list(directory.rglob("auth.json"))
+                approved.set()  # Synthetic provider approval, never a real account.
+                await session.login_task
+                assert session.status() == {**DISCONNECTED, "state": "connected"}
+                assert session.login_id is None and session.completion is None
+                assert runtime.process is process and process.returncode is None and not runtime.failed
+                assert exchanges == [True] and not errors
+                assert not list(directory.rglob("auth.json"))
+        finally:
+            await bridge.close()
+            server.close()
+            await server.wait_closed()
+            for task in tuple(handlers):
+                task.cancel()
+            await asyncio.gather(*handlers, return_exceptions=True)
+        assert process.returncode is not None and not directory.exists() and not runtime.pending
+        assert not errors and not bridge.sessions
+
+    asyncio.run(run())
 
 
 def test_max_two_sessions_and_idempotent_privileged_delete(bridge_client):
@@ -594,7 +828,8 @@ def test_favorable_tool_notification_timing_cannot_enable_unprotected_continuati
         report["tool_continuation_guarded"] = False
         return report
 
-    app = create_app(token=TOKEN, runtime_factory=MockRuntime, probe=probe, temp_parent=str(tmp_path))
+    app = create_app(token=TOKEN, runtime_factory=MockRuntime, probe=probe, temp_parent=str(tmp_path),
+                     _verify_binary=lambda binary: None)
     with TestClient(app, headers=AUTH) as client:
         assert client.post(BASE + "/login").json()["state"] == "pending"
         session = app.state.bridge.sessions[SID]
@@ -609,7 +844,8 @@ def test_actual_startup_gate_does_not_treat_tools_empty_as_sufficient(tmp_path):
         return {"binary_verified": True, "tools_empty": True, "authenticated_401_requests": 2,
                 "generation_enabled": True, "blocker": "private probe diagnostics"}
 
-    app = create_app(token=TOKEN, runtime_factory=MockRuntime, probe=probe, temp_parent=str(tmp_path))
+    app = create_app(token=TOKEN, runtime_factory=MockRuntime, probe=probe, temp_parent=str(tmp_path),
+                     _verify_binary=lambda binary: None)
     with TestClient(app, headers=AUTH) as client:
         assert client.post(BASE + "/login").json()["state"] == "pending"
         session = app.state.bridge.sessions[SID]
@@ -626,7 +862,8 @@ def test_startup_accepts_bounded_auth_recovery_without_claiming_no_retries(tmp_p
     async def probe(*args, **kwargs):
         return passing_report()
 
-    app = create_app(token=TOKEN, runtime_factory=MockRuntime, probe=probe, temp_parent=str(tmp_path))
+    app = create_app(token=TOKEN, runtime_factory=MockRuntime, probe=probe, temp_parent=str(tmp_path),
+                     _verify_binary=lambda binary: None)
     with TestClient(app, headers=AUTH) as client:
         client.post(BASE + "/login")
         session = app.state.bridge.sessions[SID]

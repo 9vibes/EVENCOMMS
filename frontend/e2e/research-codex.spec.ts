@@ -14,7 +14,7 @@ interface ChatBody {
 }
 const deviceURL = 'https://auth.openai.com/codex/device';
 const disconnected: Status = { enabled: true, state: 'disconnected', verification_url: null, user_code: null, generation_enabled: false };
-const pending: Status = { ...disconnected, state: 'pending', verification_url: deviceURL, user_code: 'CODE-1234' };
+const pending: Status = { ...disconnected, state: 'pending', verification_url: deviceURL, user_code: '123456789' };
 const connected: Status = { ...disconnected, state: 'connected', generation_enabled: true };
 const modelID = 'synthetic-codex-vision'; // Intentionally not the pinned runtime ID.
 const answer = '<b>Synthetic Codex answer</b>\nReview this personally.';
@@ -128,7 +128,7 @@ test('API stays the default; disabled, unmapped and unverified Codex fail closed
   await changeProvider(page, 'codex');
   await expect(page.getByLabel('Research question', { exact: true })).toHaveValue('');
   await expect(page.getByText('Codex account login is disabled on this server.', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Sign in with ChatGPT', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Get Codex login code', exact: true })).toBeDisabled();
   await expect(page.getByText(/Experimental Codex connection/)).toContainText('docs/codex.md');
   await expect(page.getByLabel('OpenAI API key', { exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Send via Codex', exact: true })).toBeDisabled();
@@ -152,19 +152,53 @@ test('API stays the default; disabled, unmapped and unverified Codex fail closed
   await expect(provider).toHaveValue('codex');
 });
 
+test('HTTP device-code login requires confirmation without enabling API-key entry', async ({ page, codexMock: mock }) => {
+  // Chromium resolves *.localhost locally, but this is not one of the exact
+  // loopback names allowed by the application's API-key entry policy.
+  await page.goto('http://umbrel.localhost:8765/');
+  await expect(page.getByText('SERVICE ONLINE', { exact: true })).toBeVisible();
+  await page.getByRole('tab', { name: 'RESEARCH', exact: true }).click();
+  await expect(page.getByLabel('OpenAI API key', { exact: true })).toBeDisabled();
+  await changeProvider(page, 'codex');
+  const getCode = page.getByRole('button', { name: 'Get Codex login code', exact: true });
+  await expect(getCode).toBeEnabled();
+  await expect(page.getByText(/Code login is available after a trusted-network confirmation/)).toBeVisible();
+  page.once('dialog', async dialog => {
+    expect(dialog.message()).toContain('unencrypted HTTP');
+    await dialog.dismiss();
+  });
+  await getCode.click();
+  expect(mock.calls.filter(path => path === 'login')).toHaveLength(0);
+  await expect(page.getByLabel('ChatGPT device code', { exact: true })).toHaveCount(0);
+  page.once('dialog', async dialog => {
+    expect(dialog.message()).toContain('OpenAI sign-in itself opens over HTTPS');
+    await dialog.accept();
+  });
+  await getCode.click();
+  await expect(page.getByLabel('ChatGPT device code', { exact: true })).toHaveText('123456789');
+  await expect(page.getByRole('link', { name: 'Open OpenAI device sign-in' })).toHaveAttribute('href', deviceURL);
+  expect(mock.calls.filter(path => path === 'login')).toHaveLength(1);
+  expect(mock.chats).toEqual([]);
+  await page.getByRole('button', { name: 'Cancel sign-in', exact: true }).click();
+  await expect(page.getByText('ChatGPT disconnected', { exact: true })).toBeVisible();
+  await changeProvider(page, 'api');
+  await expect(page.getByLabel('OpenAI API key', { exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Connect for this sign-in', exact: true })).toBeDisabled();
+});
+
 test('device login polls without drafts, then explicit model selection and Send authenticate the exact chat body', async ({ page, codexMock: mock }) => {
   await changeProvider(page, 'codex');
   const question = page.getByLabel('Research question', { exact: true });
   const send = page.getByRole('button', { name: 'Send via Codex', exact: true });
   await question.fill('Only this explicit question should be sent');
-  await page.getByRole('button', { name: 'Sign in with ChatGPT', exact: true }).click();
-  await expect(page.getByLabel('ChatGPT device code', { exact: true })).toHaveText('CODE-1234');
+  await page.getByRole('button', { name: 'Get Codex login code', exact: true }).click();
+  await expect(page.getByLabel('ChatGPT device code', { exact: true })).toHaveText('123456789');
   const link = page.getByRole('link', { name: 'Open OpenAI device sign-in' });
   await expect(link).toHaveAttribute('href', deviceURL);
   await expect(link).toHaveAttribute('target', '_blank');
   await expect(link).toHaveAttribute('rel', 'noreferrer noopener');
   await expect(link).toHaveAttribute('referrerpolicy', 'no-referrer');
-  await expect(page.getByRole('button', { name: 'Sign in with ChatGPT', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Get Codex login code', exact: true })).toBeDisabled();
   await expect(page.getByText(/Enable device code authentication/)).toBeVisible();
   await expect.poll(() => mock.calls.filter(path => path === 'status').length).toBeGreaterThanOrEqual(2);
   expect(mock.calls.filter(path => path === 'login')).toHaveLength(1);
@@ -195,12 +229,12 @@ test('device login polls without drafts, then explicit model selection and Send 
   ]);
   expect(mock.chats[1].request_id).not.toBe(mock.chats[0].request_id);
   const storage = await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage }));
-  for (const privateValue of [modelID, 'CODE-1234', 'Only this explicit question', answer]) expect(storage).not.toContain(privateValue);
+  for (const privateValue of [modelID, '123456789', 'Only this explicit question', answer]) expect(storage).not.toContain(privateValue);
 });
 
 test('Cancel sign-in and Disconnect clear state immediately, ignore late polls and keep Codex selected', async ({ page, codexMock: mock }) => {
   await changeProvider(page, 'codex');
-  await page.getByRole('button', { name: 'Sign in with ChatGPT', exact: true }).click();
+  await page.getByRole('button', { name: 'Get Codex login code', exact: true }).click();
   await expect(page.getByLabel('ChatGPT device code', { exact: true })).toBeVisible();
   mock.hold.add('status');
   await expect.poll(() => mock.held.has('status')).toBe(true);
@@ -215,7 +249,7 @@ test('Cancel sign-in and Disconnect clear state immediately, ignore late polls a
   expect(mock.calls).not.toContain('models');
   expect(mock.calls.filter(path => path === 'connection')).toHaveLength(1);
 
-  await page.getByRole('button', { name: 'Sign in with ChatGPT', exact: true }).click();
+  await page.getByRole('button', { name: 'Get Codex login code', exact: true }).click();
   await expect(page.getByLabel('ChatGPT device code', { exact: true })).toBeVisible();
   mock.status = { ...connected };
   await selectModel(page);
@@ -286,15 +320,15 @@ test('provider confirmation clears drafts and history, never replays them, and d
 test('pending login can be cancelled before HTTP completes; leaving stops polls without replaying login or stale models', async ({ page, codexMock: mock }) => {
   await changeProvider(page, 'codex');
   mock.hold.add('login');
-  await page.getByRole('button', { name: 'Sign in with ChatGPT', exact: true }).click();
+  await page.getByRole('button', { name: 'Get Codex login code', exact: true }).click();
   await expect.poll(() => mock.held.has('login')).toBe(true);
   await page.getByRole('button', { name: 'Cancel sign-in', exact: true }).click();
   await expect(page.getByText('ChatGPT disconnected', { exact: true })).toBeVisible();
   await mock.held.get('login')!.fulfill({ json: pending }).catch(() => {});
   await expect(page.getByLabel('ChatGPT device code', { exact: true })).toHaveCount(0);
   mock.hold.delete('login');
-  await page.getByRole('button', { name: 'Sign in with ChatGPT', exact: true }).click();
-  await expect(page.getByLabel('ChatGPT device code', { exact: true })).toHaveText('CODE-1234');
+  await page.getByRole('button', { name: 'Get Codex login code', exact: true }).click();
+  await expect(page.getByLabel('ChatGPT device code', { exact: true })).toHaveText('123456789');
   mock.hold.add('status');
   await expect.poll(() => mock.held.has('status')).toBe(true);
   await page.getByRole('tab', { name: 'OPERATOR', exact: true }).click();
@@ -316,7 +350,7 @@ test('pending login can be cancelled before HTTP completes; leaving stops polls 
   mock.status = { ...disconnected, state: 'failed' };
   await changeProvider(page, 'codex');
   await expect(page.getByText('ChatGPT sign-in failed', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Sign in with ChatGPT', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Get Codex login code', exact: true })).toBeEnabled();
   await expect(page.getByLabel('ChatGPT device code', { exact: true })).toHaveCount(0);
   await expect(page.getByLabel('Codex model selector', { exact: true })).toBeDisabled();
 });

@@ -145,9 +145,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", required=True, help="Local Docker image tag or ID (never pulled)")
     parser.add_argument("--upgrade-from", help="Optional local prior image for the first boot (never pulled)")
+    parser.add_argument("--upgrade-private-auth", action="store_true",
+                        help="Seed private auth with the prior initializer (requires --upgrade-from and 0.4.0+)")
     parser.add_argument("--speech-pcm", type=Path,
                         help="Raw mono 16 kHz s16le speech mentioning 'north entrance'; enables real base.en STT")
     args = parser.parse_args()
+    if args.upgrade_private_auth and not args.upgrade_from:
+        parser.error("--upgrade-private-auth requires --upgrade-from with a private-auth-capable image")
     pcm = args.speech_pcm.read_bytes() if args.speech_pcm else None
     if pcm is not None and (not pcm or len(pcm) % 2 or len(pcm) > 480000):
         parser.error("Speech must be nonempty raw PCM s16le, at most 15 seconds at 16 kHz")
@@ -188,6 +192,10 @@ def main():
             "--mount", f"type=volume,source={auth_volume},target=/codex-auth,volume-nocopy",
             image_id,
         )
+        if args.upgrade_private_auth:
+            # Older releases lack --codex-auth-dir. Opt in only for 0.4.0+;
+            # candidate INIT_CHECK must preserve the prior token on this volume.
+            docker(*initializer[:-1], first_image, "python", "-c", INIT_CHECK)
         snapshot_script = """
 import hashlib
 import json
@@ -330,6 +338,7 @@ assert os.access("/data/models", os.W_OK)
         print("Smoke passed: non-root, read-only, auth, WebSocket origins, database persistence,"
               " image-managed configs readable by UID 101, private token denied to UID 101,"
               " idempotent private initializer, config upgrade and initializer data preservation"
+              + (", prior initializer private token preserved" if args.upgrade_private_auth else "")
               + (", real CPU STT and persistent model cache" if pcm is not None else " (STT skipped)"))
     finally:
         cleanup = [("rm", "--force", name, name + "-init")]

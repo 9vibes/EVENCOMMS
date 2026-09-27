@@ -1,4 +1,4 @@
-# EVENCOMMS 0.4.0 Protocol
+# EVENCOMMS 0.4.1 Protocol
 
 All API requests use same-origin URLs by default. JSON responses unless noted.
 Bearer authentication uses `Authorization: Bearer <token>`, never URL parameters.
@@ -7,9 +7,10 @@ are single use. Wearer tokens identify exactly one persistent conversation.
 The original v0.1 wearer conversation, voice transcription and draft-ordering
 contracts below are unchanged. Streaming and Research are separate operator
 features; neither automatically sends a reply to the wearer.
-The 0.4.0 source candidate adds experimental Codex Research without changing the
-default API provider or existing optional OpenAI-key settings. This protocol
-does not establish successful CI, publication or live-account acceptance.
+Version 0.4.0 introduced experimental Codex Research without changing the default
+API provider or existing optional OpenAI-key settings. The 0.4.1 device-login
+hotfix retains those contracts; see [hotfix notes](codex.md#041-hotfix) and
+[release results](https://github.com/9vibes/EVENCOMMS/releases).
 
 ## HTTP
 
@@ -110,9 +111,13 @@ requires confirmation and clears local history/drafts without replaying them.
   user_code, generation_enabled}`. `state` is `disconnected`, `pending`,
   `connected` or `failed`. Reading status never starts a login or inference.
 - `POST /api/research/codex/login` `{}` -> status above. Explicitly starts an
-  isolated device-code login for that operator. Remote browser initiation requires
-  HTTPS; exact loopback HTTP is only for isolated development. The UI accepts only
-  `https://auth.openai.com/codex/device` as the verification URL.
+  isolated device-code login for that operator, using the same native flow as
+  `codex login --device-auth`. HTTP console initiation requires an explicit
+  trusted-network confirmation; API-key entry retains its HTTPS/exact-loopback
+  restriction. Console HTTP traffic is still unencrypted. The UI accepts only
+  `https://auth.openai.com/codex/device` as the verification URL and preserves
+  OpenAI's issued code, including nine-digit numeric codes, unchanged. It never
+  fabricates codes or restricts them to exactly nine digits.
 - `DELETE /api/research/codex/connection` -> disconnected status. Clears local
   mapping/results immediately and requests best-effort runtime cleanup; it never
   switches the UI to API mode. Logout/expiry also discard late replies.
@@ -126,7 +131,9 @@ requires confirmation and clears local history/drafts without replaying them.
 
 The connected state alone is insufficient: Send also requires the runtime's
 `generation_enabled` safety gate. The official Codex 0.157.1 dependency and binary
-hashes are pinned. Unexpected tool calls/approval requests fail closed; no shell,
+hashes are pinned. Independent 10-second binary verification allows code login when
+the 75-second generation proof fails or times out, but never enables generation without
+the complete proof. Unexpected tool calls/approval requests fail closed; no shell,
 web search, MCP or other external tools are enabled. A private loopback relay
 enforces one non-401 upstream Responses request per explicit Send; the pinned
 credential-recovery path permits up to three attempts after confirmed 401s.
@@ -140,7 +147,9 @@ one active generation per session, and eight fresh sends per login to bound
 ephemeral threads. Pending sign-in expires after 15 minutes; connected login
 expires after at most eight hours or the operator's earlier expiry. A 120-second
 bridge lease renewed every 30 seconds bounds abandoned sessions after backend
-failure. The bridge request deadline is 85 seconds; backend `OPENAI_TIMEOUT` also
+failure. A heartbeat acknowledgement overlapping login must not cancel a session
+whose creation is still unacknowledged; uncertain creation retains its cleanup
+obligation. The bridge request deadline is 85 seconds; backend `OPENAI_TIMEOUT` also
 applies. `OPENAI_MAX_OUTPUT_TOKENS` is API-only. Codex text is bounded at 16,000
 characters; unsafe/oversized runtime output fails without another turn.
 

@@ -19,7 +19,7 @@ from pydantic import ValidationError
 from .generation import Generation
 from .policy import BRIDGE_TOKEN_PATTERN, DEVICE_URL, MODELS, USER_CODE_PATTERN, generation_allowed
 from .private_token import load_token_file
-from .probe import run_probe
+from .probe import run_probe, verify_binary
 from .rpc import ProtocolError, Runtime
 from .validation import BODY_LIMIT, Chat, Lease, SESSION_PATTERN
 
@@ -29,6 +29,8 @@ LOGIN_SECONDS = 15 * 60
 SESSION_SECONDS = 8 * 60 * 60
 CHAT_SECONDS = 85
 THREAD_CAP = 8
+BINARY_VERIFY_SECONDS = 10
+PROBE_SECONDS = 75
 RETRY_WARNING = (
     " The bridge does not automatically resubmit failed generation. "
     "Codex may retry during bounded OAuth credential recovery. "
@@ -407,7 +409,7 @@ class PrivateBoundary:
 
 
 def create_app(*, token=None, token_file=None, binary=None, runtime_factory=Runtime, probe=run_probe,
-               clock=time.monotonic, temp_parent="/tmp"):
+               clock=time.monotonic, temp_parent="/tmp", _verify_binary=verify_binary):
     token = token if token is not None else os.environ.get("CODEX_BRIDGE_TOKEN", "")
     token_file = token_file if token_file is not None else os.environ.get("CODEX_BRIDGE_TOKEN_FILE", "")
     secret = ""
@@ -426,13 +428,21 @@ def create_app(*, token=None, token_file=None, binary=None, runtime_factory=Runt
             raise RuntimeError("CODEX_BRIDGE_TOKEN must contain 32 to 256 hexadecimal characters")
         # Includes all subsequently spawned Codex children and their credentials.
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
-        report = {}
+        binary_verified = False
         with contextlib.suppress(Exception):
-            async with asyncio.timeout(75):
-                report = await probe(binary, temp_parent=temp_parent)
+            async with asyncio.timeout(BINARY_VERIFY_SECONDS):
+                await asyncio.to_thread(_verify_binary, binary)
+                binary_verified = True
+        # Authentication must not depend on the longer generation proof returning.
+        report = {}
+        if binary_verified:
+            with contextlib.suppress(Exception):
+                async with asyncio.timeout(PROBE_SECONDS):
+                    report = await probe(binary, temp_parent=temp_parent)
         app.state.bridge = Bridge(binary, runtime_factory=runtime_factory, clock=clock, temp_parent=temp_parent,
-                                  generation_enabled=report.get("generation_enabled") is True and generation_allowed(report),
-                                  binary_verified=report.get("binary_verified") is True)
+                                  generation_enabled=(binary_verified and generation_allowed(report)
+                                                      and report.get("generation_enabled") is True),
+                                  binary_verified=binary_verified)
         try:
             yield
         finally:

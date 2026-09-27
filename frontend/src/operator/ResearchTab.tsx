@@ -219,7 +219,8 @@ export default function ResearchTab({ token, onUnauthorized, active }: {
   function changeCodexConnection(action: 'login' | 'disconnect' | null) {
     if (!active || !codex) return;
     if (action !== 'disconnect' && (chatRequest.current || codexPolling.current)) return;
-    if (action === 'login' && (!secureKeyEntry || !codexStatus?.enabled || codexStatus.state === 'pending' || codexStatus.state === 'connected')) return;
+    if (action === 'login' && (!codexStatus?.enabled || codexStatus.state === 'pending' || codexStatus.state === 'connected')) return;
+    if (action === 'login' && !secureKeyEntry && !window.confirm('This console uses unencrypted HTTP. Its operator session and one-time code can be intercepted. Continue only on a trusted LAN or VPN. OpenAI sign-in itself opens over HTTPS. Request a Codex login code?')) return;
     if (action === 'disconnect') {
       if ((history.length || prompt || frames.length || busy || capturing) && !window.confirm('Disconnect ChatGPT and clear this chat, question and captured frames? A pending request may still consume plan allowance. Cleanup is best effort.')) return;
       clearChat(true);
@@ -406,13 +407,14 @@ export default function ResearchTab({ token, onUnauthorized, active }: {
           <p className="op-fine-print">Experimental Codex connection. Uses ChatGPT plan allowance; see the setup and privacy guide: <code>docs/codex.md</code>.</p>
           {codexStatus?.enabled && codexStatus.state === 'connected' && !codexStatus.generation_enabled && <p className="op-error-text" role="status">Runtime verification did not pass; sending disabled. API not used automatically.</p>}
           <div className="op-research-actions">
-            <button type="button" className="op-button" disabled={busy || codexBusy || !secureKeyEntry || !codexStatus?.enabled || codexStatus.state === 'pending' || codexStatus.state === 'connected'} onClick={() => changeCodexConnection('login')}>Sign in with ChatGPT</button>
+            <button type="button" className="op-button" disabled={busy || codexBusy || !codexStatus?.enabled || codexStatus.state === 'pending' || codexStatus.state === 'connected'} onClick={() => changeCodexConnection('login')}>Get Codex login code</button>
             {codexStatus?.enabled !== false && <button type="button" className="op-button" disabled={codexBusy && codexStatus?.state === 'disconnected'} onClick={() => changeCodexConnection('disconnect')}>{codexStatus?.state === 'pending' ? 'Cancel sign-in' : 'Disconnect ChatGPT'}</button>}
           </div>
-          {!secureKeyEntry && <p className="op-fine-print">ChatGPT sign-in requires HTTPS or localhost. Use a secure connection to this console.</p>}
+          <p className="op-fine-print">Uses the same device-code flow as <code>codex login --device-auth</code>. Request a code here, then enter it on OpenAI's HTTPS page. A code from another CLI session will not connect this app.</p>
+          {!secureKeyEntry && <p className="op-fine-print">This console uses unencrypted HTTP. Code login is available after a trusted-network confirmation, but your operator session and code can be intercepted. Prefer HTTPS; never use this on a public network. API-key entry remains disabled.</p>}
           {codexStatus?.state === 'pending' && <>
             {deviceInstructions ? <div className="op-pair-code">
-              <span>Enter this code on OpenAI's device sign-in page:</span>
+              <span>Enter this one-time Codex code on OpenAI's device sign-in page (expires in 15 minutes):</span>
               <strong aria-label="ChatGPT device code">{codexStatus.user_code}</strong>
               <a className="op-text-button" href={DEVICE_URL} target="_blank" rel="noreferrer noopener" referrerPolicy="no-referrer">Open OpenAI device sign-in</a>
             </div> : <p className="op-fine-print">OpenAI device instructions are unavailable or invalid. Waiting for valid instructions; you can cancel sign-in.</p>}

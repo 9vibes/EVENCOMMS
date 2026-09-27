@@ -37,6 +37,7 @@ class Session:
     cleanup_until: float
     identity: str = field(default_factory=lambda: secrets.token_hex(32))
     started: bool = False
+    creation_ack: object | None = None
     status: dict = field(default_factory=disconnected)
     models: tuple | None = None
     pending: tuple | None = None
@@ -181,14 +182,15 @@ class CodexResearch:
                     self.credentials.prune()
                     if self.closed:
                         return
-                    live = [(parent, session) for parent, session in self.sessions.items() if session.started]
+                    live = [(parent, session, session.creation_ack)
+                            for parent, session in self.sessions.items() if session.started]
                     if not live:
                         return
                     sent = self.credentials.now()
-                    for _, session in live:
+                    for _, session, _ in live:
                         # Even a lost acknowledgement may have renewed remotely.
                         session.cleanup_until = min(session.expires, sent + LEASE_TTL)
-                    identities = {session.identity for _, session in live}
+                    identities = {session.identity for _, session, _ in live}
                     response = await self.fetch("POST", "/lease", {"sessions": sorted(identities)}, lifecycle=True)
                     renewed = response.get("sessions")
                     if (set(response) != {"sessions"} or not isinstance(renewed, list) or len(renewed) > len(live)
@@ -197,12 +199,13 @@ class CodexResearch:
                             or len(set(renewed)) != len(renewed)):
                         raise HTTPException(502, "Invalid Codex lease acknowledgement")
                     now = self.credentials.now()
-                    for parent, session in live:
+                    for parent, session, creation_ack in live:
                         if self.sessions.get(parent) is not session:
                             continue
                         if session.identity not in renewed:
-                            # The bridge already reaped failed/expired sessions.
-                            self.clear(parent, bridge_closed=True)
+                            # Absence cannot prove reaping across an unacknowledged or newer login.
+                            if creation_ack is not None and session.creation_ack is creation_ack:
+                                self.clear(parent, bridge_closed=True)
                         elif (not self.closed and session.lease_until > now and session.expires > now
                               and self.credentials.operators.get(parent, 0) > now):
                             session.lease_until = min(session.expires, sent + LEASE_TTL)
@@ -393,7 +396,10 @@ class CodexResearch:
     async def login(self, parent, session):
         async def work():
             session.started = True
-            return await self.fetch_status(parent, session, login=True)
+            session.creation_ack = None
+            result = await self.fetch_status(parent, session, login=True)
+            session.creation_ack = object()
+            return result
 
         result = await self.run(parent, session, "login", session.identity, work)
         if result["state"] in {"disconnected", "failed"}:
