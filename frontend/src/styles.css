@@ -361,6 +361,7 @@ body:has(> #root > .operator-app) { margin: 0; }
 .operator-app .op-research-frames figcaption { display: grid; gap: 4px; font: 10px/1.6 var(--op-mono); color: var(--op-muted); margin-top: 8px; overflow-wrap: anywhere; }
 .operator-app .op-research-settings, .operator-app .op-research-preview, .operator-app .op-research-privacy { padding: 18px; overflow-wrap: anywhere; }
 .operator-app .op-research-settings fieldset { display: grid; gap: 12px; min-width: 0; padding: 0; border: 0; margin: 0; }
+.operator-app .op-research-provider { display: grid; gap: 10px; margin-bottom: 20px; }
 .operator-app .op-research-settings legend { font-size: 15px; font-weight: 600; padding: 0 0 14px; }
 .operator-app .op-research-settings label { font-size: 12px; font-weight: 600; }
 .operator-app .op-research-settings input, .operator-app .op-research-settings select { display: block; min-width: 0; width: 100%; padding: 10px; background: var(--comms-inset); color: var(--op-ink); border: 1px solid var(--comms-control-line); border-radius: 4px; font: 12px var(--op-mono); }

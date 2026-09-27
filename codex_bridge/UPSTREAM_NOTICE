@@ -1,0 +1,15 @@
+OpenAI Codex
+Copyright 2025 OpenAI
+
+This project includes code derived from [Ratatui](https://github.com/ratatui/ratatui), licensed under the MIT license.
+Copyright (c) 2016-2022 Florian Dehau
+Copyright (c) 2023-2025 The Ratatui Developers
+
+The Docker image includes the unmodified official Codex 0.157.1 binary.
+Source: https://github.com/openai/codex/tree/36650394c5b38c2990ccf2a3457165ca3e9d9726
+License: UPSTREAM_LICENSE (Apache-2.0).
+
+models.json is a modified, reduced copy of the bundled model metadata at that
+commit. It retains selected upstream selectors and their required metadata, disables
+tool selectors, omits optional tool messages, and replaces base instructions
+with the EVENCOMMS no-tool research policy. It does not establish entitlement.

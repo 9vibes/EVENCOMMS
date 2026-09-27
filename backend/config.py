@@ -6,6 +6,8 @@ from math import isfinite
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from .private_token import load_token_file
+
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -51,6 +53,8 @@ class Settings:
     openai_api_key: str = field(default="", repr=False)
     openai_timeout: float = 90
     openai_max_output_tokens: int = 2048
+    codex_bridge_url: str = ""
+    codex_bridge_token: str = field(default="", repr=False)
     max_sessions: int = 100
     max_messages_per_session: int = 1000
     stream_enabled: bool = False
@@ -85,7 +89,15 @@ class Settings:
             media_host(self.public_host)
         except ValueError:
             raise ValueError("PUBLIC_HOST must be an IPv4, IPv6 or DNS host without a port or path") from None
-        for name, value in (("MEDIA_API_URL", self.media_api_url), ("MEDIA_HLS_URL", self.media_hls_url)):
+        if (not isinstance(self.codex_bridge_url, str) or not isinstance(self.codex_bridge_token, str)
+                or bool(self.codex_bridge_url) != bool(self.codex_bridge_token)):
+            raise ValueError("CODEX_BRIDGE_URL and CODEX_BRIDGE_TOKEN must be configured together")
+        if self.codex_bridge_token and not re.fullmatch(r"[0-9A-Fa-f]{32,256}", self.codex_bridge_token):
+            raise ValueError("CODEX_BRIDGE_TOKEN must contain 32 to 256 hexadecimal characters")
+        origins = [("MEDIA_API_URL", self.media_api_url), ("MEDIA_HLS_URL", self.media_hls_url)]
+        if self.codex_bridge_url:
+            origins.append(("CODEX_BRIDGE_URL", self.codex_bridge_url))
+        for name, value in origins:
             try:
                 if (not isinstance(value, str) or len(value) > 2048
                         or not re.fullmatch(r"https?://(?:[A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(?::[0-9]{1,5})?", value)):
@@ -99,6 +111,12 @@ class Settings:
 
     @classmethod
     def from_env(cls):
+        token = os.getenv("CODEX_BRIDGE_TOKEN", "")
+        token_file = os.getenv("CODEX_BRIDGE_TOKEN_FILE", "")
+        if token and token_file:
+            raise ValueError("Configure only one of CODEX_BRIDGE_TOKEN or CODEX_BRIDGE_TOKEN_FILE")
+        if token_file:
+            token = load_token_file(token_file)
         return cls(
             admin_password=os.getenv("ADMIN_PASSWORD", ""),
             database_path=Path(os.getenv("DATABASE_PATH", str(ROOT / "data/evencomms.sqlite3"))),
@@ -115,6 +133,8 @@ class Settings:
             openai_api_key=os.getenv("OPENAI_API_KEY", ""),
             openai_timeout=float(os.getenv("OPENAI_TIMEOUT", "90")),
             openai_max_output_tokens=int(os.getenv("OPENAI_MAX_OUTPUT_TOKENS", "2048")),
+            codex_bridge_url=os.getenv("CODEX_BRIDGE_URL", ""),
+            codex_bridge_token=token,
             max_sessions=int(os.getenv("MAX_SESSIONS", "100")),
             max_messages_per_session=int(os.getenv("MAX_MESSAGES_PER_SESSION", "1000")),
             stream_enabled=env_bool("STREAM_ENABLED", "false"),

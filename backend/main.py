@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, StrictStr, ValidationError, field_va
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .config import Settings
+from .codex_research import CodexResearch, register_codex_research_routes
 from .research import Research, register_research_routes
 from .services import Transcriber, suggest
 from .store import Store
@@ -192,9 +193,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.ollama = httpx.AsyncClient(timeout=httpx.Timeout(config.ollama_timeout), trust_env=False)
         app.state.stream = Stream(config, app.state.store)
         app.state.research = Research(config, app.state.credentials)
+        app.state.codex_research = CodexResearch(config, app.state.credentials)
         try:
             yield
         finally:
+            await app.state.codex_research.aclose()
             await app.state.research.aclose()
             for peer in list(app.state.peers.values()):
                 await close_socket(peer.socket, 1001)
@@ -391,6 +394,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     register_stream_routes(app, operator, bearer, digest, body)
     register_research_routes(app, operator, bearer, digest, body)
+    register_codex_research_routes(app, operator, bearer, digest, body)
 
     @app.get("/{path:path}", include_in_schema=False)
     async def frontend(path: str):

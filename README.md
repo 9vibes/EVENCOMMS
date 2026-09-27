@@ -8,15 +8,32 @@ it**. Wearer assistance remains local and human-approved. The separate optional
 RESEARCH tab can send an operator's questions and selected still frames to OpenAI;
 it never automatically replies to the glasses.
 
-Version `0.3.0` adds operator-only OpenAI Research, selected video-frame captures,
-1x to 4x digital zoom/pan, and Low-Latency HLS with 200 ms parts and a one-second
-browser live-sync target, not a latency guarantee. Published artifacts and check
-results are recorded on the [release page](https://github.com/9vibes/EVENCOMMS/releases).
+Version `0.4.0` adds an **experimental ChatGPT account connection through Codex**
+for operator-only Research. Source files alone do not establish successful CI,
+image publication or an Umbrel installation. Consult the
+[release page](https://github.com/9vibes/EVENCOMMS/releases) for actual artifacts
+and check results. The release image names share the existing public package:
+`ghcr.io/9vibes/evencomms:0.4.0` for the app and
+`ghcr.io/9vibes/evencomms:0.4.0-codex` for the isolated bridge.
 The installable Umbrel package is maintained
 in [KNS-Umbrel](https://github.com/9vibes/KNS-Umbrel/tree/master/kunas-evencomms).
 The files in `deploy/umbrel` remain local-development templates, not the store's
 digest-pinned release package. See [the protocol](docs/protocol.md) for API
 contracts. Physical G2/phone behavior still needs hardware acceptance testing.
+
+Codex uses eligible ChatGPT plan allowance rather than API-key billing, with no
+automatic API, provider or model fallback and no model-entitlement guarantee.
+The `0.4.0` Umbrel source package installs its isolated service by default,
+automatically provisioning a private service token. Startup runs synthetic
+loopback safety probes, not real account login or inference. Account use requires
+explicit Research provider selection, device sign-in, model selection and Send.
+The UI still defaults to API mode; existing optional OpenAI keys are unchanged.
+Standalone `compose.yml` has no Codex service unless you add `compose.codex.yml`.
+See [Codex setup, allowance and privacy](docs/codex.md).
+
+The features introduced in `0.3.0` remain: API Research, selected video-frame
+captures, 1x to 4x digital zoom/pan, and Low-Latency HLS with 200 ms parts and a
+one-second browser live-sync target, not a latency guarantee.
 
 **OPERATOR / STREAM** switches between conversations and a full-width live RTMP
 feed with authenticated HLS playback, without recording or transcoding. Updating
@@ -29,7 +46,7 @@ is installed automatically by the image's init service. See the
 
 ## Operator And Wearer Interaction
 
-### Research (0.3.0)
+### Research API Mode
 
 The **RESEARCH** tab beside STREAM provides an OpenAI chat, an available-model
 selector, and a live preview with **Capture frame**. A capture includes video
@@ -49,6 +66,24 @@ to OpenAI and no web-search tools are enabled. Requests use `store: false`, not 
 zero-retention guarantee. Provider testing uses MockTransport and browser stubs,
 not live OpenAI calls. See
 [Research setup and privacy](docs/research.md).
+
+### Experimental Codex Mode
+
+Choose **ChatGPT account (Experimental Codex)** in Research, then **Sign in with
+ChatGPT**. Complete device login on OpenAI's site; never paste account passwords,
+cookies or OAuth tokens into EVENCOMMS. Remote sign-in requires HTTPS, configured
+manually with explicit origins; exact localhost HTTP is for isolated development.
+Choose a pinned model explicitly and use **Send via Codex** to submit displayed
+history and selected stills. Signing in and choosing a model do not submit them.
+
+An eligible plan/workspace is required, and plan limits, purchased credits and
+account/workspace data controls apply. This is not unlimited API access or the
+API `store: false` contract. At most two signed-in operators and eight fresh
+sends per login bound retained RAM. Account tokens and submitted threads are
+ephemeral; disconnect, expiry or restart loses the login. Browser New chat does
+not erase previously submitted bridge threads. A failed bridge/probe disables
+Codex generation without blocking the rest of the app or falling back to API
+billing. See the [Codex guide](docs/codex.md) before using sensitive captures.
 
 ### Wearer Controls
 
@@ -70,9 +105,10 @@ continuous, word-by-word partial updates are **not guaranteed**.
 ## Umbrel Installation
 
 Add `https://github.com/9vibes/KNS-Umbrel` to Umbrel's community app stores, then
-install **EVENCOMMS** (`kunas-evencomms`). The initial published image targets
-Linux x86-64 (amd64), uses CPU speech recognition, and needs no NVIDIA runtime.
-ARM devices are not supported by this release image.
+install **EVENCOMMS** (`kunas-evencomms`). Check that package's version and verified
+digests rather than assuming this source candidate is already available there.
+The release target is Linux x86-64 (amd64), with CPU speech recognition and no
+NVIDIA runtime. ARM support is not established by the pinned Codex ARM64 asset.
 
 Open the app on port `28097` and sign in with the generated application password
 shown by Umbrel; no username is required. The browser simulator works without
@@ -88,6 +124,13 @@ reachable `OLLAMA_URL` and installed `OLLAMA_MODEL` to enable AI suggestions.
 Read the [store setup guide](https://github.com/9vibes/KNS-Umbrel/blob/master/kunas-evencomms/README.md)
 for persistent storage, settings, TLS and phone packaging. Adding the package to
 the store is not the same as installing it on a particular Stone.
+
+In the `0.4.0` source package, `data_init` provisions a separate private
+`codex-auth/token`, mounted read-only by backend and bridge, never by nginx or
+MediaMTX. No app-password reuse or manual bridge credential setup is needed.
+The normal server depends only on `data_init`, not bridge health. No public
+ports are added. See the [source staging guide](deploy/umbrel/README.md) for
+isolation, backup permissions and release-promotion requirements.
 
 ## Standalone Deployment
 
@@ -119,7 +162,11 @@ curl --fail http://127.0.0.1:28097/health
    simulation**. This does not promise browser microphone capture or validate
    real glasses audio.
 
-The locally built tag is `evencomms:0.3.0`; no registry pull is needed or claimed.
+The locally built tag is `evencomms:0.4.0`; no registry pull is needed or claimed.
+This default stack does not install/start Codex. The optional standalone
+`compose.codex.yml` overlay builds `evencomms-codex:0.4.0` and uses a manually
+generated private `.env` service token, unlike Umbrel's automatic provisioning.
+Follow [the Codex deployment guide](docs/codex.md#standalone-opt-in) to opt in.
 The API binds port `8000` inside the private network and is **never published**.
 The only HTTP entry is `web` nginx on container port `8080`, published as host
 `28097`, bound to loopback by default. For isolated LAN testing set
@@ -239,7 +286,10 @@ deployment files alone do not provide them.
 | `OLLAMA_TIMEOUT` | `30` | Suggestion deadline in seconds. |
 | `OPENAI_API_KEY` | Empty | Optional shared server-managed key for Research; alternatively connect a sign-in-only key in the HTTPS UI. Never expose through frontend environment variables. |
 | `OPENAI_TIMEOUT` | `90` | Research provider deadline, greater than zero and at most 110 seconds. |
-| `OPENAI_MAX_OUTPUT_TOKENS` | `2048` | Research output cap, 256..8192; API usage is billable. |
+| `OPENAI_MAX_OUTPUT_TOKENS` | `2048` | API-mode Research output cap, 256..8192; API usage is billable. Does not cap Codex tokens. |
+| `CODEX_BRIDGE_URL` | Empty; `http://codex-bridge:8001` in Umbrel/standalone Codex overlay | Private bridge origin; no public port or browser setting. |
+| `CODEX_BRIDGE_TOKEN` | Empty | Standalone opt-in service secret in private `.env`, not an OpenAI credential or app password. |
+| `CODEX_BRIDGE_TOKEN_FILE` | Empty; `/run/codex-auth/token` in Umbrel | Read-only private service-secret file used by backend and bridge; mutually exclusive with `CODEX_BRIDGE_TOKEN`. |
 | `MAX_SESSIONS` | `100` | Stored conversation limit. |
 | `MAX_MESSAGES_PER_SESSION` | `1000` | Stored messages per conversation. |
 | `DATABASE_PATH` | `/data/evencomms.sqlite3` in image | SQLite database, including adjacent WAL files. |
@@ -289,6 +339,10 @@ behavior on the target hardware before tuning models or considering GPU work.
   off-event-loop validation slots and two separate provider-call slots each
   allow one request per operator; excess work receives `429`, not an unbounded
   CPU queue. History is never silently shortened to fit.
+- Experimental Codex adds at most two account sessions and eight fresh sends per
+  login to bound RAM. Its independent two-worker validation pool can run alongside
+  API validation. No automatic model/provider/API fallback; allowance and account
+  entitlement remain subject to OpenAI. See [Codex limits](docs/codex.md#operator-steps).
 - Ollama failure does not prevent a manual operator reply. Suggestions use
   bounded recent conversation context and remain editable, never auto-sent.
 
@@ -300,14 +354,22 @@ audio to application storage. Sent conversation text is stored in SQLite; only
 an explicit suggestion request sends bounded recent text to the configured
 local Ollama instance. This is not end-to-end encryption from the server.
 
-Research is a separate, opt-in cloud workflow: Send to OpenAI submits its displayed
-chat history and selected JPEG still frames to OpenAI, not to the wearer. It does
+Research is a separate, opt-in cloud workflow. In API mode, Send to OpenAI submits
+its displayed chat history and selected JPEG still frames to OpenAI, not to the wearer. It does
 not send continuous video/audio, stream keys or wearer drafts. Research history
 and captures are browser-memory-only; a bounded server result cache supports
 recent retries. UI-entered API keys are isolated per sign-in in server RAM and
 clear on logout, expiry, explicit Research disconnect or restart. A server
 environment key is shared by authenticated operators. Provider billing/retention policies still apply even
 with `store: false`. Use a private deployment for sensitive footage.
+
+Experimental Codex instead uses ChatGPT allowance and account/workspace data
+controls. Its official runtime and private relay handle OAuth credentials only
+in isolated bridge RAM; the browser/backend never receive account tokens.
+Submitted history and images remain in ephemeral threads until runtime cleanup,
+not just until New chat. Startup probes use synthetic loopback fixtures, never a
+real account. Retention, quota, cleanup and retry caveats are in the
+[Codex privacy guide](docs/codex.md#privacy-and-lifetime).
 
 Wearer drafts/tokens use browser `localStorage`; operator authentication uses
 `sessionStorage`. These are not encrypted vaults: protect browser profiles,
@@ -332,6 +394,9 @@ For a consistent filesystem backup, stop the server first, back up the entire
 restart. Restore with UID/GID `10001:10001` ownership. `docker compose down`
 preserves the named volume; `docker compose down -v` destroys it. Neither that
 command nor conversation deletion removes independent backups.
+For Umbrel, also back up the separate private `${APP_DATA_DIR}/codex-auth`
+directory with its service token, preserving `10001:10002` ownership, directory
+mode `0750` and token mode `0440`. Never persist or back up OAuth credentials.
 
 ## Development And Verification
 
@@ -376,12 +441,16 @@ has been validated against SDK 0.0.16; it stamps a minimum Even app version of
 generates an origin-specific manifest/config in temporary storage without
 changing the normal server build. Never deploy an example-origin test package.
 
-The CI workflow checks backend tests, frontend tests/build, browser end-to-end
-tests, Even packaging, standalone Compose configuration and an image build/smoke
-test. CI does not fetch speech models or verify glasses hardware. The separate
-release workflow runs CI, builds an amd64 image, tests real CPU transcription
-with synthetic speech and persisted data/model cache, then publishes that exact
-image to GHCR. See [release checks](scripts/README.md). Before deployment, verify a
-real utterance, model cache reuse, pairing/reconnect, gesture ordering, deletion,
+The verification pipeline covers backend tests, frontend tests/build, browser
+end-to-end tests, Even packaging, Compose configuration and image smoke tests.
+Codex checks use the pinned real binary with synthetic loopback OAuth/inference,
+not a live account. Its authenticated private `GET /ready` must pass the actual
+generation gate with zero idle account sessions; `/health` alone is insufficient.
+The `0.4.0` release must pass CI, CPU transcription with synthetic speech,
+persistence/upgrade checks and isolated bridge checks before publishing the
+exact tested amd64 images. The canonical store update follows verified anonymous
+pulls of both digests. See [release checks](scripts/README.md); this checklist is
+not a claim that the candidate has passed GitHub CI or been published. Before
+deployment, verify a real utterance, model cache reuse, pairing/reconnect, gesture ordering, deletion,
 TLS/CORS/network permissions, and an operator-approved AI reply on target
 hardware. Report the actual test results, not a fixed historical test count.

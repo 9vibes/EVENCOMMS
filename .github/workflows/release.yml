@@ -1,4 +1,4 @@
-name: Release Image
+name: Release Images
 
 on:
   push:
@@ -25,12 +25,13 @@ jobs:
   publish:
     needs: ci
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: write
     env:
       IMAGE: ghcr.io/9vibes/evencomms
+      OPENAI_API_KEY: ""
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -49,26 +50,32 @@ jobs:
           from pathlib import Path
 
           project = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
-          versions = [project, *[
-              json.loads(Path(path).read_text())["version"]
-              for path in ("frontend/package.json", "frontend/app.json")
-          ]]
+          versions = [project, json.loads(Path("frontend/app.json").read_text())["version"]]
+          for directory in ("frontend", "codex_bridge"):
+              package = json.loads(Path(directory, "package.json").read_text())
+              lock = json.loads(Path(directory, "package-lock.json").read_text())
+              versions.extend((package["version"], lock["version"], lock["packages"][""]["version"]))
+              if directory == "codex_bridge" and (
+                      package["dependencies"]["@openai/codex"] != "0.157.1"
+                      or lock["packages"][""]["dependencies"]["@openai/codex"] != "0.157.1"
+                      or lock["packages"]["node_modules/@openai/codex"]["version"] != "0.157.1"):
+                  raise SystemExit("The official Codex dependency must remain pinned to 0.157.1")
           tag = os.environ["GITHUB_REF_NAME"] if os.environ["GITHUB_REF_TYPE"] == "tag" else ""
           version = os.environ["REQUESTED_VERSION"] or (tag.removeprefix("v") if tag else project)
           # SemVer without build metadata: '+' cannot occur in a Docker tag.
           number = r"(?:0|[1-9][0-9]*)"
           identifier = rf"(?:{number}|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)"
           pattern = rf"{number}\.{number}\.{number}(?:-{identifier}(?:\.{identifier})*)?"
-          if not re.fullmatch(pattern, version) or len(version) > 128:
-              raise SystemExit("Expected a Docker-compatible semantic version (no v or build metadata)")
+          if not re.fullmatch(pattern, version) or len(version + "-codex") > 128:
+              raise SystemExit("Expected a Docker-compatible semantic version with room for -codex (no v or build metadata)")
           if any(value != version for value in versions):
-              raise SystemExit("Release, pyproject, frontend package, and app versions must match")
+              raise SystemExit("Release, pyproject, app, package and package-lock root versions must match")
           if tag and tag != "v" + version:
               raise SystemExit("Source tag must be v followed by the exact release version")
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
               output.write(f"version={version}\n")
           PY
-      - name: Build local amd64 release image
+      - name: Build and capture final local amd64 app and bridge candidates
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
@@ -78,6 +85,22 @@ jobs:
             --label "org.opencontainers.image.version=$VERSION" \
             --tag evencomms:release .
           docker image inspect --format '{{.Id}}' evencomms:release > "$RUNNER_TEMP/release-image-id"
+          docker build --platform linux/amd64 -f deploy/codex/Dockerfile \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.version=$VERSION" \
+            --tag evencomms-codex:release .
+          docker image inspect --format '{{.Id}}' evencomms-codex:release > "$RUNNER_TEMP/release-codex-image-id"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install final-candidate browser smoke runtime
+        working-directory: frontend
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
       - name: Generate real speech fixture
         run: |
           sudo apt-get update
@@ -86,10 +109,11 @@ jobs:
             "Please meet me at the north entrance. I am waiting at the north entrance."
           ffmpeg -hide_banner -loglevel error -y -i "$RUNNER_TEMP/speech.wav" \
             -ar 16000 -ac 1 -c:a pcm_s16le -f s16le "$RUNNER_TEMP/speech.pcm"
-      - name: Pull prior release for in-place upgrade verification
+      - name: Pull pinned prior releases for in-place upgrade verification
         run: |
           docker pull ghcr.io/9vibes/evencomms:0.1.0@sha256:491e90e678e0b90ba72c50a262900a42a8738213cd654377a714b27a05befc84
           docker pull ghcr.io/9vibes/evencomms:0.2.1@sha256:847d7e3c3b331da64ee6f73e2710162aa72a78bd282d1b3027dde27c45ae14e2
+          docker pull ghcr.io/9vibes/evencomms:0.3.0@sha256:2e81e2c04292e4d48f38fa3c568eb2742d0afbe8a0e468db6c4c62e1d5f3e6c3
       - name: Verify fresh candidate with cold CPU STT and generated configs
         run: |
           python scripts/container_smoke.py \
@@ -107,12 +131,29 @@ jobs:
             --image "$(cat "$RUNNER_TEMP/release-image-id")" \
             --upgrade-from ghcr.io/9vibes/evencomms:0.2.1@sha256:847d7e3c3b331da64ee6f73e2710162aa72a78bd282d1b3027dde27c45ae14e2 \
             --speech-pcm "$RUNNER_TEMP/speech.pcm"
+      - name: Verify 0.3.0 upgrade with real STT, configs and persistent data
+        run: |
+          python scripts/container_smoke.py \
+            --image "$(cat "$RUNNER_TEMP/release-image-id")" \
+            --upgrade-from ghcr.io/9vibes/evencomms:0.3.0@sha256:2e81e2c04292e4d48f38fa3c568eb2742d0afbe8a0e468db6c4c62e1d5f3e6c3 \
+            --speech-pcm "$RUNNER_TEMP/speech.pcm"
+      - name: Verify final image IDs, OCI labels, private pair and real RTMP/HLS/browser playback
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        # Uses the source managed Compose stack with captured IDs, never staging
+        # public tags. Research UI fixtures are not evidence of a live account.
+        run: |
+          python scripts/codex_container_smoke.py \
+            --image "$(cat "$RUNNER_TEMP/release-image-id")" \
+            --codex-image "$(cat "$RUNNER_TEMP/release-codex-image-id")" \
+            --version "$VERSION" --revision "$GITHUB_SHA" \
+            --source "https://github.com/$GITHUB_REPOSITORY" --browser
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Refuse replacement of an existing image tag
+      - name: Preflight BOTH immutable tags before either image can be pushed
         env:
           VERSION: ${{ steps.version.outputs.version }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -131,55 +172,98 @@ jobs:
           query = urllib.parse.urlencode({"service": "ghcr.io", "scope": "repository:9vibes/evencomms:pull"})
           request = urllib.request.Request("https://ghcr.io/token?" + query,
               headers={"Authorization": "Basic " + credentials})
-          with urllib.request.urlopen(request, timeout=30) as response:
-              token = json.load(response)["token"]
-          request = urllib.request.Request(
-              f'https://{os.environ["IMAGE"]}/manifests/{os.environ["VERSION"]}'.replace(
-                  "ghcr.io/", "ghcr.io/v2/", 1),
-              headers={"Authorization": "Bearer " + token, "Accept": ", ".join([
-                  "application/vnd.oci.image.manifest.v1+json",
-                  "application/vnd.oci.image.index.v1+json",
-                  "application/vnd.docker.distribution.manifest.v2+json",
-                  "application/vnd.docker.distribution.manifest.list.v2+json",
-              ])})
           try:
-              with urllib.request.urlopen(request, timeout=30):
-                  raise SystemExit("Release tag already exists; refusing to overwrite it")
-          except urllib.error.HTTPError as error:
-              # Only a registry-confirmed missing manifest is safe, not auth/network errors.
-              if error.code != 404:
-                  raise SystemExit(f"Registry check failed: HTTP {error.code}") from None
-              codes = {item["code"] for item in json.load(error).get("errors", [])}
-              if not codes or not codes <= {"MANIFEST_UNKNOWN", "NAME_UNKNOWN"}:
-                  raise SystemExit("Registry did not confirm that the release tag is absent")
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  token = json.load(response)["token"]
+              for tag in (os.environ["VERSION"], os.environ["VERSION"] + "-codex"):
+                  request = urllib.request.Request(
+                      f'https://{os.environ["IMAGE"]}/manifests/{tag}'.replace("ghcr.io/", "ghcr.io/v2/", 1),
+                      headers={"Authorization": "Bearer " + token, "Accept": ", ".join([
+                          "application/vnd.oci.image.manifest.v1+json",
+                          "application/vnd.oci.image.index.v1+json",
+                          "application/vnd.docker.distribution.manifest.v2+json",
+                          "application/vnd.docker.distribution.manifest.list.v2+json",
+                      ])})
+                  try:
+                      with urllib.request.urlopen(request, timeout=30):
+                          raise SystemExit(f"Release tag {tag} already exists; refusing to push either image")
+                  except urllib.error.HTTPError as error:
+                      # Only confirmed missing manifests are safe, never auth/network errors.
+                      if error.code != 404:
+                          raise SystemExit(f"Registry preflight failed: HTTP {error.code}") from None
+                      codes = {item["code"] for item in json.load(error).get("errors", [])}
+                      if not codes or not codes <= {"MANIFEST_UNKNOWN", "NAME_UNKNOWN"}:
+                          raise SystemExit("Registry did not confirm that both release tags are absent")
+          except Exception:
+              raise SystemExit("Registry preflight failed; private diagnostics suppressed") from None
           PY
-      - name: Push the tested image and record repository digest
+      - name: Verify exact tested IDs again, then tag and push without rebuilding
         id: publish
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          docker tag "$(cat "$RUNNER_TEMP/release-image-id")" "$IMAGE:$VERSION"
-          docker push "$IMAGE:$VERSION"
-          docker image inspect "$IMAGE:$VERSION" --format '{{json .RepoDigests}}' | python -c '
-          import json, os, re, sys
+          python - <<'PY'
+          import json
+          import os
+          import re
+          import sys
           from pathlib import Path
-          refs = [ref for ref in json.load(sys.stdin)
-                  if re.fullmatch(re.escape(os.environ["IMAGE"]) + r"@sha256:[0-9a-f]{64}", ref)]
-          if len(refs) != 1:
-              raise SystemExit("Expected exactly one published repository digest")
-          Path("image-reference.txt").write_text(refs[0] + "\n")
-          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
-              image, version = os.environ["IMAGE"], os.environ["VERSION"]
-              summary.write(f"## Published Image\n\n`{image}:{version}`\n\n")
-              summary.write(f"`{refs[0]}`\n\nPlatform: **linux/amd64 only**.\n\n")
-              summary.write("The package may initially be private. A maintainer must set the GHCR "
-                            "package visibility to Public if needed, then verify an anonymous pull "
-                            "by digest before submitting the Umbrel store integration. "
-                            "Publication does not wait for public visibility.\n")
-          '
-      - name: Upload immutable image reference
+          sys.path.insert(0, "scripts")
+          from codex_container_smoke import image_info
+          from container_smoke import docker
+
+          image, version = os.environ["IMAGE"], os.environ["VERSION"]
+          source, revision = "https://github.com/" + os.environ["GITHUB_REPOSITORY"], os.environ["GITHUB_SHA"]
+          labels = {"org.opencontainers.image." + key: value for key, value in
+                    (("version", version), ("source", source), ("revision", revision))}
+          candidates = [
+              ("app", "release-image-id", "evencomms:release", version, "10001:10001", labels, "image-reference.txt"),
+              ("codex", "release-codex-image-id", "evencomms-codex:release", version + "-codex", "10002:10002",
+               {**labels, "org.opencontainers.image.codex-version": "0.157.1"}, "codex-image-reference.txt"),
+          ]
+          records = {}
+          try:
+              # Check BOTH images before even tagging one. All subsequent operations
+              # use the saved IDs, not build output or a potentially moved local tag.
+              for name, file, local, tag, user, expected, artifact in candidates:
+                  identity = Path(os.environ["RUNNER_TEMP"], file).read_text().strip()
+                  if image_info(identity, user, expected) != identity or image_info(local, user, expected) != identity:
+                      raise RuntimeError("Tested image ID changed")
+                  records[name] = {"image_id": identity, "tag": f"{image}:{tag}"}
+              for name, file, local, tag, user, expected, artifact in candidates:
+                  record = records[name]
+                  docker("tag", record["image_id"], record["tag"])
+                  if image_info(record["tag"], user, expected) != record["image_id"]:
+                      raise RuntimeError("Publication tag does not reference the tested image")
+                  docker("push", record["tag"], timeout=600)
+                  info = json.loads(docker("image", "inspect", record["tag"]))[0]
+                  refs = [ref for ref in info["RepoDigests"]
+                          if re.fullmatch(re.escape(image) + r"@sha256:[0-9a-f]{64}", ref)]
+                  if info["Id"] != record["image_id"] or len(refs) != 1:
+                      raise RuntimeError("Expected the tested ID and one published repository digest")
+                  record["reference"] = refs[0]
+                  record["digest"] = refs[0].split("@", 1)[1]
+                  Path(artifact).write_text(refs[0] + "\n")
+              Path("release-images.json").write_text(json.dumps({"version": version, "source": source,
+                  "revision": revision, "platform": "linux/amd64", "codex_dependency": "0.157.1",
+                  "images": records}, indent=2) + "\n")
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+                  summary.write("## Published Images\n\n")
+                  for record in records.values():
+                      summary.write(f'`{record["tag"]}`\n\n`{record["reference"]}`\n\n')
+                  summary.write("Both tags use the existing public `ghcr.io/9vibes/evencomms` package. "
+                                "Platform: **linux/amd64 only**. Codex dependency: **0.157.1**. "
+                                "No live account was used or verified.\n")
+          except Exception:
+              raise SystemExit("Image publication failed; private diagnostics suppressed") from None
+          PY
+      - name: Upload immutable image references
+        if: always() && steps.publish.outcome != 'skipped'
         uses: actions/upload-artifact@v4
         with:
           name: image-reference
-          path: image-reference.txt
+          path: |
+            image-reference.txt
+            codex-image-reference.txt
+            release-images.json
           if-no-files-found: error

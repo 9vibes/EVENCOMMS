@@ -1,9 +1,24 @@
-# Research Chat (0.3.0)
+# Research Chat: API Mode
 
 RESEARCH is an operator-only OpenAI chat with optional still-frame attachments.
 It is separate from wearer conversations and never automatically replies to the
 glasses. No continuous video, audio, stream key, or unsent wearer draft is sent to
 OpenAI. Capturing a frame only adds a local draft attachment; Send is explicit.
+
+This page describes the **OpenAI API key** connection introduced in 0.3.0 and
+retained as the default in the 0.4.0 source candidate. The **ChatGPT account
+(Experimental Codex)** option has separate authentication, eligible-plan allowance
+and retention behavior. It remains experimental, with no model-entitlement
+guarantee. See [its setup and privacy guide](codex.md).
+Switching providers clears the local conversation after confirmation; it never
+replays history to a different provider or silently falls back to API billing.
+
+The 0.4.0 Umbrel source package includes an isolated idle bridge and automatically
+provisions its private service token, not an account login. Startup runs synthetic
+loopback probes only; actual account use requires provider choice, device login,
+an explicit model and Send. Standalone deployments require `compose.codex.yml`
+and a private `.env` service token. A failed bridge does not block API Research or
+other app features. Existing optional API keys and user overrides are unchanged.
 
 ## Connection And Privacy
 
@@ -129,5 +144,7 @@ JPEG capture. Synthetic keys/model IDs are test fixtures, not production choices
 These checks do not verify a live OpenAI account, model compatibility, billing or
 retention. Native Safari and physical glasses/phone acceptance remain unverified.
 See [the smoke guide](../scripts/README.md#research-real-frame-browser-smoke).
-The GitHub release page records 0.3.0 publication results; source features are not proof
-of a published image or Umbrel installation.
+Consult the [GitHub release page](https://github.com/9vibes/EVENCOMMS/releases) for
+historical 0.3.0 publication results and actual 0.4.0 candidate verification.
+Source features and synthetic Codex tests are not proof of successful release CI,
+a published image, a live-account test or an Umbrel installation.

@@ -1,9 +1,15 @@
-"""Prepare dedicated Umbrel data and optional image-managed config volumes."""
+"""Prepare Umbrel data and optional dedicated config and private credential volumes."""
 import argparse
+import fcntl
 import os
 from pathlib import Path
 import secrets
 import stat
+
+if __package__:
+    from .private_token import read_token
+else:
+    from private_token import read_token
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -92,12 +98,81 @@ def install_configs(target: Path, source: Path = ROOT / 'infra'):
         os.close(root)
 
 
+def initialize_codex_auth(directory: Path, *, config_dir: Path = Path('/config')):
+    """Install a random-once token, separate from app data and image-managed configs."""
+    if (not directory.is_absolute() or '..' in directory.parts
+            or len(os.fsencode(directory)) > 4096 or '\0' in str(directory)):
+        raise ValueError('Codex auth directory must be absolute, bounded and contain no parent traversal')
+    directory = Path('/' + str(directory).lstrip('/'))
+    config_dir = Path('/' + os.path.abspath(config_dir).lstrip('/'))
+    for protected in (Path('/data'), Path('/config'), ROOT, config_dir):
+        if directory.is_relative_to(protected) or protected.is_relative_to(directory):
+            raise ValueError('Codex auth directory must not overlap data, config or source directories')
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    try:
+        root = os.open('/', flags)
+        try:
+            for part in directory.parts[1:]:
+                try:
+                    os.mkdir(part, mode=0o755, dir_fd=root)
+                except FileExistsError:
+                    pass
+                child = os.open(part, flags, dir_fd=root)
+                os.close(root)
+                root = child
+            # Serialize initializers, including the brief link/unlink publication window.
+            fcntl.flock(root, fcntl.LOCK_EX)
+            os.fchown(root, 10001, 10002)
+            os.fchmod(root, 0o750)
+            try:
+                descriptor = os.open('token', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=root)
+            except FileNotFoundError:
+                temporary = f'.token.{secrets.token_hex(16)}.tmp'
+                descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                                     0o600, dir_fd=root)
+                try:
+                    with os.fdopen(descriptor, 'wb') as output:
+                        content = secrets.token_hex(32).encode('ascii')
+                        if output.write(content) != len(content):
+                            raise OSError('Incomplete credential write')
+                        output.flush()
+                        os.fchown(output.fileno(), 10001, 10002)
+                        os.fchmod(output.fileno(), 0o440)
+                        os.fsync(output.fileno())
+                    # Unlike replace(), link() cannot clobber a concurrent winner.
+                    try:
+                        os.link(temporary, 'token', src_dir_fd=root, dst_dir_fd=root, follow_symlinks=False)
+                    except FileExistsError:
+                        pass
+                finally:
+                    os.unlink(temporary, dir_fd=root)
+                descriptor = os.open('token', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=root)
+            try:
+                read_token(descriptor, check_permissions=False)
+                os.fchown(descriptor, 10001, 10002)
+                os.fchmod(descriptor, 0o440)
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            os.fsync(root)
+        finally:
+            os.close(root)
+    except (OSError, ValueError):
+        raise RuntimeError('Unable to initialize private Codex bridge credential') from None
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config-dir', help='Install image-managed configs into this dedicated directory')
+    parser.add_argument('--codex-auth-dir', help='Provision a random-once private Codex bridge token in this directory')
     args = parser.parse_args(argv)
     if args.config_dir is not None and not args.config_dir.strip():
         parser.error('--config-dir must not be empty')
+    if args.codex_auth_dir is not None:
+        if not args.codex_auth_dir.strip():
+            parser.error('--codex-auth-dir must not be empty')
+        initialize_codex_auth(Path(args.codex_auth_dir),
+                              config_dir=Path(args.config_dir) if args.config_dir is not None else Path('/config'))
     initialize()
     if args.config_dir is not None:
         install_configs(Path(args.config_dir))

@@ -6,22 +6,62 @@ import os
 from pathlib import Path
 import re
 import secrets
+import signal
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
 from uuid import uuid4
 
 
-def docker(*args, stdin=None, env=None, check=True):
-    result = subprocess.run(
-        ["docker", *args], input=stdin, text=True, capture_output=True,
-        timeout=180, env={**os.environ, **(env or {})},
-    )
+def docker(*args, stdin=None, env=None, check=True, timeout=180):
+    try:
+        result = subprocess.run(
+            ["docker", *args], input=stdin, text=True, capture_output=True,
+            timeout=timeout, env={**os.environ, **(env or {})},
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        raise RuntimeError(f"Docker {args[0]} could not complete; private diagnostics suppressed") from None
     if check and result.returncode:
         # Do not dump commands, stdin, or container logs containing credentials.
         raise RuntimeError(f"Docker {args[0]} failed (exit {result.returncode})")
     return result.stdout.strip()
+
+
+# Run inside the offline initializer. Neither the token nor its hash leaves it.
+INIT_CHECK = """
+import hashlib
+import json
+import re
+import stat
+import subprocess
+import sys
+from pathlib import Path
+
+root = Path('/codex-auth')
+token = root / 'token'
+before = hashlib.sha256(token.read_bytes()).digest() if token.exists() else None
+for _ in range(2):
+    result = subprocess.run([sys.executable, '-m', 'backend.init_data',
+                             '--config-dir', '/config', '--codex-auth-dir', '/codex-auth'],
+                            capture_output=True, timeout=30)
+    assert result.returncode == 0
+    for path, mode in ((root, 0o750), (token, 0o440)):
+        info = path.lstat()
+        assert (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)) == (10001, 10002, mode)
+    assert root.is_dir() and stat.S_ISREG(token.lstat().st_mode) and token.stat().st_nlink == 1
+    raw = token.read_bytes()
+    assert re.fullmatch(rb'[0-9a-f]{64}', raw)
+    current = hashlib.sha256(raw).digest()
+    assert before is None or before == current
+    before = current
+    assert {path.name for path in root.iterdir()} == {'token'}
+    assert {path.name for path in Path('/config').iterdir()} == {'nginx.conf', 'mediamtx.yml'}
+    for name in ('nginx.conf', 'mediamtx.yml'):
+        assert Path('/config', name).read_bytes() == Path('/app/infra', name).read_bytes()
+print(json.dumps({'private_init': True, 'token_preserved': True}))
+"""
 
 
 def request(base, path, *, token=None, data=None, expected=200, timeout=150):
@@ -128,12 +168,13 @@ def main():
     name = "evencomms-smoke-" + uuid4().hex[:12]
     volume = name + "-data"
     config_volume = name + "-config"
+    auth_volume = name + "-codex-auth"
     password = secrets.token_urlsafe(32)
     environment = {"ADMIN_PASSWORD": password}
     explicit_origin = "https://smoke.example.test"
     created_volumes = []
     try:
-        for owned_volume in (volume, config_volume):
+        for owned_volume in (volume, config_volume, auth_volume):
             # Track our unique name even if Docker creates it but the CLI times out.
             created_volumes.append(owned_volume)
             docker("volume", "create", owned_volume)
@@ -144,6 +185,7 @@ def main():
             "--security-opt", "no-new-privileges:true",
             "--mount", f"type=volume,source={volume},target=/data,volume-nocopy",
             "--mount", f"type=volume,source={config_volume},target=/config,volume-nocopy",
+            "--mount", f"type=volume,source={auth_volume},target=/codex-auth,volume-nocopy",
             image_id,
         )
         snapshot_script = """
@@ -184,12 +226,13 @@ marker.chmod(0o640)
             for path, info in before_init.items():
                 if path in {"evencomms.sqlite3", "evencomms.sqlite3-wal", "evencomms.sqlite3-shm"}:
                     info[3:] = [0o600, 10001, 10001]
-            docker(*initializer, "python", "-m", "backend.init_data", "--config-dir", "/config")
+            docker(*initializer, "python", "-c", INIT_CHECK)
             assert json.loads(docker(*initializer, "python", "-c", snapshot_script)) == before_init
             docker("run", "--rm", "--name", name + "-init", "--pull=never",
                    "--user", "101:101", "--read-only", "--network", "none", "--cap-drop", "ALL",
                    "--security-opt", "no-new-privileges:true",
-                   "--mount", f"type=volume,source={config_volume},target=/config,readonly,volume-nocopy",
+                    "--mount", f"type=volume,source={config_volume},target=/config,readonly,volume-nocopy",
+                    "--mount", f"type=volume,source={auth_volume},target=/run/codex-auth,readonly,volume-nocopy",
                    image_id, "python", "-c", """
 import os
 import stat
@@ -203,6 +246,12 @@ for name in ('nginx.conf', 'mediamtx.yml'):
     assert installed.read_bytes() == Path('/app/infra', name).read_bytes()
     assert stat.S_IMODE(installed.stat().st_mode) == 0o644
 assert b'$http_host' in (target / 'nginx.conf').read_bytes()
+try:
+    Path('/run/codex-auth/token').read_bytes()
+except PermissionError:
+    pass
+else:
+    raise AssertionError('UID 101 must not read the private bridge token')
 """)
             print(f"Starting {'fresh' if attempt == 0 else 'replacement'} container", flush=True)
             docker("run", "--detach", "--name", name, "--pull=never", "--init",
@@ -279,7 +328,8 @@ assert os.access("/data/models", os.W_OK)
             docker("stop", "--time", "15", name)
             docker("rm", name)
         print("Smoke passed: non-root, read-only, auth, WebSocket origins, database persistence,"
-              " image-managed configs readable by UID 101, config upgrade and initializer data preservation"
+              " image-managed configs readable by UID 101, private token denied to UID 101,"
+              " idempotent private initializer, config upgrade and initializer data preservation"
               + (", real CPU STT and persistent model cache" if pcm is not None else " (STT skipped)"))
     finally:
         cleanup = [("rm", "--force", name, name + "-init")]
@@ -287,9 +337,18 @@ assert os.access("/data/models", os.W_OK)
         for command in cleanup:
             try:
                 docker(*command, check=False)
-            except (OSError, subprocess.TimeoutExpired):
+            except RuntimeError:
                 print("Warning: Docker smoke resource cleanup failed", flush=True)
 
 
 if __name__ == "__main__":
-    main()
+    def interrupted(signum, frame):
+        raise RuntimeError("Container smoke interrupted")
+
+    signal.signal(signal.SIGTERM, interrupted)
+    signal.signal(signal.SIGINT, interrupted)
+    try:
+        main()
+    except Exception:
+        print("Container smoke failed; private diagnostics suppressed", file=sys.stderr)
+        sys.exit(1)

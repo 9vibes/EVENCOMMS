@@ -1,0 +1,69 @@
+{
+  "models": [
+    {
+      "slug": "gpt-6-luna",
+      "display_name": "GPT-6-Luna",
+      "base_instructions": "You are a research assistant. You have no tools, workspace, live feed, audio or web access.",
+      "description": "Fast and affordable model for easier tasks.",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {"effort": "low", "description": "Fast responses with lighter reasoning"},
+        {"effort": "medium", "description": "Balances speed and reasoning depth for everyday tasks"},
+        {"effort": "high", "description": "Greater reasoning depth for complex problems"},
+        {"effort": "xhigh", "description": "Extra high reasoning depth for complex problems"},
+        {"effort": "max", "description": "Maximum reasoning depth for the hardest problems"}
+      ],
+      "visibility": "list",
+      "supported_in_api": true,
+      "priority": 3,
+      "availability_nux": null,
+      "upgrade": null,
+      "support_verbosity": true,
+      "default_verbosity": "low",
+      "truncation_policy": {"mode": "tokens", "limit": 10000},
+      "context_window": 272000,
+      "input_modalities": ["text", "image"],
+      "shell_type": "disabled",
+      "tool_mode": "direct",
+      "apply_patch_tool_type": null,
+      "experimental_supported_tools": [],
+      "supports_search_tool": false,
+      "supports_experimental_context": false,
+      "include_apps_usage_instructions": false,
+      "node_repl_disabled": true
+    },
+    {
+      "slug": "gpt-6-astra",
+      "display_name": "GPT-6-Astra",
+      "base_instructions": "You are a research assistant. You have no tools, workspace, live feed, audio or web access.",
+      "description": "Frontier intelligence for the most demanding work.",
+      "default_reasoning_level": "low",
+      "supported_reasoning_levels": [
+        {"effort": "low", "description": "Fast responses with lighter reasoning"},
+        {"effort": "medium", "description": "Balances speed and reasoning depth for everyday tasks"},
+        {"effort": "high", "description": "Greater reasoning depth for complex problems"},
+        {"effort": "xhigh", "description": "Extra high reasoning depth for complex problems"},
+        {"effort": "max", "description": "Maximum reasoning depth for the hardest problems"},
+        {"effort": "ultra", "description": "Maximum reasoning with automatic task delegation"}
+      ],
+      "visibility": "list",
+      "supported_in_api": true,
+      "priority": 1,
+      "availability_nux": null,
+      "upgrade": null,
+      "support_verbosity": true,
+      "default_verbosity": "low",
+      "truncation_policy": {"mode": "tokens", "limit": 10000},
+      "context_window": 272000,
+      "input_modalities": ["text", "image"],
+      "shell_type": "disabled",
+      "tool_mode": "direct",
+      "apply_patch_tool_type": null,
+      "experimental_supported_tools": [],
+      "supports_search_tool": false,
+      "supports_experimental_context": false,
+      "include_apps_usage_instructions": false,
+      "node_repl_disabled": true
+    }
+  ]
+}

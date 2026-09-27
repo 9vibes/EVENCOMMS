@@ -1,4 +1,4 @@
-# STAGING ONLY: build/load evencomms:0.3.0 from source.
+# STAGING ONLY: build/load evencomms:0.4.0 and evencomms-codex:0.4.0 from source.
 # Umbrel supplies app_proxy's image and its platform compose configuration.
 x-logging: &logging
   driver: json-file
@@ -16,10 +16,10 @@ services:
     logging: *logging
 
   data_init:
-    image: evencomms:0.3.0
+    image: evencomms:0.4.0
     pull_policy: never
     user: "0:0"
-    command: [python, -m, backend.init_data, --config-dir, /config]
+    command: [python, -m, backend.init_data, --config-dir, /config, --codex-auth-dir, /codex-auth]
     network_mode: none
     read_only: true
     restart: "no"
@@ -30,10 +30,11 @@ services:
     volumes:
       - ${APP_DATA_DIR:?Umbrel must provide APP_DATA_DIR}/data:/data
       - ${APP_DATA_DIR:?Umbrel must provide APP_DATA_DIR}/config:/config
+      - ${APP_DATA_DIR:?Umbrel must provide APP_DATA_DIR}/codex-auth:/codex-auth
     logging: *logging
 
   server:
-    image: evencomms:0.3.0
+    image: evencomms:0.4.0
     pull_policy: never
     init: true
     restart: unless-stopped
@@ -54,6 +55,8 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_TIMEOUT: ${OPENAI_TIMEOUT:-90}
       OPENAI_MAX_OUTPUT_TOKENS: ${OPENAI_MAX_OUTPUT_TOKENS:-2048}
+      CODEX_BRIDGE_URL: http://codex-bridge:8001
+      CODEX_BRIDGE_TOKEN_FILE: /run/codex-auth/token
       MAX_SESSIONS: ${MAX_SESSIONS:-100}
       MAX_MESSAGES_PER_SESSION: ${MAX_MESSAGES_PER_SESSION:-1000}
       STREAM_ENABLED: ${STREAM_ENABLED:-true}
@@ -62,9 +65,10 @@ services:
       MEDIA_API_URL: http://mediamtx:9997
       MEDIA_HLS_URL: http://mediamtx:8888
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
-    networks: [private]
+    networks: [private, codex_link]
     volumes:
       - ${APP_DATA_DIR:?Umbrel must provide APP_DATA_DIR}/data:/data
+      - ${APP_DATA_DIR:?Umbrel must provide APP_DATA_DIR}/codex-auth:/run/codex-auth:ro
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=256m
@@ -72,6 +76,40 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+    logging: *logging
+
+  codex-bridge:
+    image: evencomms-codex:0.4.0
+    pull_policy: never
+    user: "10002:10002"
+    init: true
+    restart: unless-stopped
+    depends_on:
+      data_init:
+        condition: service_completed_successfully
+    environment:
+      CODEX_BRIDGE_TOKEN_FILE: /run/codex-auth/token
+    networks: [codex_link, codex_egress]
+    # Only the private service credential; no app data, configs, homes or socket.
+    volumes:
+      - ${APP_DATA_DIR:?Umbrel must provide APP_DATA_DIR}/codex-auth:/run/codex-auth:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=256m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 1g
+    memswap_limit: 1g
+    cpus: 1.0
+    pids_limit: 128
+    ulimits:
+      core: 0
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=3).close()"]
+      start_period: 90s
+      interval: 10s
+      timeout: 5s
+      retries: 3
     logging: *logging
 
   mediamtx:
@@ -120,4 +158,8 @@ services:
 networks:
   # Not internal:true: published RTMP must remain reachable by LAN/VPN encoders.
   private:
+    driver: bridge
+  codex_link:
+    internal: true
+  codex_egress:
     driver: bridge

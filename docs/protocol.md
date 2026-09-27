@@ -1,4 +1,4 @@
-# EVENCOMMS 0.3.0 Protocol
+# EVENCOMMS 0.4.0 Protocol
 
 All API requests use same-origin URLs by default. JSON responses unless noted.
 Bearer authentication uses `Authorization: Bearer <token>`, never URL parameters.
@@ -7,6 +7,9 @@ are single use. Wearer tokens identify exactly one persistent conversation.
 The original v0.1 wearer conversation, voice transcription and draft-ordering
 contracts below are unchanged. Streaming and Research are separate operator
 features; neither automatically sends a reply to the wearer.
+The 0.4.0 source candidate adds experimental Codex Research without changing the
+default API provider or existing optional OpenAI-key settings. This protocol
+does not establish successful CI, publication or live-account acceptance.
 
 ## HTTP
 
@@ -61,12 +64,12 @@ HttpOnly playback cookie, not bearer tokens in URLs. `POST /api/logout` revokes
 the operator token, linked playback sessions and its in-memory Research state.
 The internal media route must never be exposed by a public proxy.
 
-Version 0.3.0 uses LL-HLS with 200 ms parts and a one-second browser live-sync
-target, not a guaranteed glass-to-glass delay. The 0.1.0 image has no streaming;
+Since version 0.3.0, streaming uses LL-HLS with 200 ms parts and a one-second
+browser live-sync target, not a guaranteed glass-to-glass delay. The 0.1.0 image has no streaming;
 0.2.1 uses ordinary fMP4 HLS. Upgrades require the full stack and matching configs.
 Digital zoom/pan is browser-only, not a camera-control API.
 
-## Research
+## Research API Mode
 
 See [the Research contract](research.md#backend-contract) for the complete schema,
 error handling and retry semantics. Every Research route requires an operator
@@ -94,3 +97,82 @@ are browser-RAM-only; a bounded server result cache supports recent retries.
 Explicit Send includes the displayed history and frames. OpenAI calls are billable
 and use `store: false`, which is not a zero-retention guarantee. Provider tests use
 MockTransport/browser stubs, not live OpenAI verification.
+
+## Experimental Codex Research
+
+See [Codex deployment, allowance and privacy](codex.md). These separate routes
+require the same operator Bearer authentication, never a wearer token or playback
+cookie. Codex does not consume `OPENAI_API_KEY`, substitute a model, or fall back
+to another provider/API billing. The UI starts in API mode; switching providers
+requires confirmation and clears local history/drafts without replaying them.
+
+- `GET /api/research/codex/status` -> `{enabled, state, verification_url,
+  user_code, generation_enabled}`. `state` is `disconnected`, `pending`,
+  `connected` or `failed`. Reading status never starts a login or inference.
+- `POST /api/research/codex/login` `{}` -> status above. Explicitly starts an
+  isolated device-code login for that operator. Remote browser initiation requires
+  HTTPS; exact loopback HTTP is only for isolated development. The UI accepts only
+  `https://auth.openai.com/codex/device` as the verification URL.
+- `DELETE /api/research/codex/connection` -> disconnected status. Clears local
+  mapping/results immediately and requests best-effort runtime cleanup; it never
+  switches the UI to API mode. Logout/expiry also discard late replies.
+- `GET /api/research/codex/models` -> `{models: [{id, image}]}`. Lists pinned runtime
+  selectors for a connected account, not live entitlement guarantees. Explicit
+  selection is required; unsupported selections fail rather than being replaced.
+- `POST /api/research/codex/chat` uses the API mode's bounded request schema:
+  explicit model, request UUID and displayed user/assistant history with selected
+  JPEG stills. Returns `{request_id, model, text, incomplete, usage}`. Only Send
+  submits the question/images; login, polling and model selection do not.
+
+The connected state alone is insufficient: Send also requires the runtime's
+`generation_enabled` safety gate. The official Codex 0.157.1 dependency and binary
+hashes are pinned. Unexpected tool calls/approval requests fail closed; no shell,
+web search, MCP or other external tools are enabled. A private loopback relay
+enforces one non-401 upstream Responses request per explicit Send; the pinned
+credential-recovery path permits up to three attempts after confirmed 401s.
+There is no automatic application resubmission. Manual retries can consume more
+allowance, even with the same UUID after a failure, cache expiry or restart.
+
+Message/image/body limits match API mode. Codex has its own two-worker validation
+pool; admission before body receipt permits at most two waiters per operator and
+four globally, including duplicate IDs. There are at most two account sessions,
+one active generation per session, and eight fresh sends per login to bound
+ephemeral threads. Pending sign-in expires after 15 minutes; connected login
+expires after at most eight hours or the operator's earlier expiry. A 120-second
+bridge lease renewed every 30 seconds bounds abandoned sessions after backend
+failure. The bridge request deadline is 85 seconds; backend `OPENAI_TIMEOUT` also
+applies. `OPENAI_MAX_OUTPUT_TOKENS` is API-only. Codex text is bounded at 16,000
+characters; unsafe/oversized runtime output fails without another turn.
+
+ChatGPT eligible-plan allowance, purchased credits and account/workspace data
+controls apply, not the API `store: false` contract. The browser and main backend
+never receive OAuth tokens or account email. Credentials and submitted threads
+remain in isolated bridge RAM until cleanup; New chat clears the browser view,
+not submitted threads. No continuous video/audio, wearer drafts or stream secrets
+are submitted. Cleanup is not a guarantee of remote revocation or zero retention.
+
+## Private Bridge
+
+Umbrel starts the isolated service by default and provisions a private service
+token once. Backend and bridge read `CODEX_BRIDGE_TOKEN_FILE=/run/codex-auth/token`
+from read-only mounts of `${APP_DATA_DIR}/codex-auth`; init alone mounts it
+writable at `/codex-auth`. The directory/file use ownership `10001:10002`, modes
+`0750`/`0440`. No token is placed in shared config or app-password metadata.
+Standalone `compose.yml` does not start Codex; its explicit `compose.codex.yml`
+overlay instead shares a manually generated `CODEX_BRIDGE_TOKEN` from private
+`.env`. Both services reject conflicting token sources. The service secret is
+not a user/account token and is never sent to the Codex child runtime.
+
+The bridge publishes no ports and joins only an internal backend link and a
+separate outbound network. It has no app-data/config, host-home or Docker-socket
+mount. Ordinary server startup is not gated on bridge health. Startup runs
+bounded synthetic loopback probe processes, not a real account login/inference.
+The service stays idle with no account sessions until explicit device login.
+
+`GET /health` is liveness only. Private `GET /ready` requires the service Bearer
+token and returns `{binary_verified: boolean, generation_enabled: boolean,
+active_sessions: number}`. It does not create a session, contact a real provider
+or return credentials/account details. Release verification must require both
+booleans to be `true` and `active_sessions: 0` after startup, not just HTTP
+liveness. These checks do not prove entitlement or a successful installation.
+Do not expose bridge port `8001` or raw app-server RPC through public ingress.

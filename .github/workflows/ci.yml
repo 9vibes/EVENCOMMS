@@ -11,6 +11,55 @@ permissions:
   contents: read
 
 jobs:
+  codex-prototype:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      ADMIN_PASSWORD: ci-only-not-a-deployment-password
+      OPENAI_API_KEY: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install test dependencies and pinned Codex assets
+        run: |
+          pip install '.[test]'
+          npm ci --prefix codex_bridge --ignore-scripts --no-audit --no-fund
+      - name: Verify actual runtime with synthetic account and provider only
+        run: python scripts/check_codex_runtime.py --binary codex_bridge/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex --temp-parent "${{ runner.temp }}"
+      - name: Validate isolated prototype Compose
+        env:
+          # Configuration validation only; managed container checks provision a random file.
+          CODEX_BRIDGE_TOKEN: "0000000000000000000000000000000000000000000000000000000000000000"
+        run: docker compose -f compose.yml -f compose.codex.yml config --quiet
+      - name: Build candidate app and bridge without publication
+        run: |
+          docker build --platform linux/amd64 \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.version=0.4.0" \
+            --tag evencomms:0.4.0 .
+          docker image inspect --format '{{.Id}}' evencomms:0.4.0 > "$RUNNER_TEMP/ci-app-image-id"
+          docker build --platform linux/amd64 -f deploy/codex/Dockerfile \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.version=0.4.0" \
+            --tag evencomms-codex:0.4.0 .
+          docker image inspect --format '{{.Id}}' evencomms-codex:0.4.0 > "$RUNNER_TEMP/ci-codex-image-id"
+      - name: Verify exact candidate pair, offline binary and managed private auth (no account)
+        # The helper owns unique Compose resources and removes them in finally,
+        # including on signals; raw logs and private credentials are never dumped.
+        run: |
+          python scripts/codex_container_smoke.py \
+            --image "$(cat "$RUNNER_TEMP/ci-app-image-id")" \
+            --codex-image "$(cat "$RUNNER_TEMP/ci-codex-image-id")" \
+            --version 0.4.0 --revision "$GITHUB_SHA" \
+            --source "https://github.com/$GITHUB_REPOSITORY"
+
   test:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -55,7 +104,7 @@ jobs:
           ADMIN_PASSWORD: ci-only-not-a-deployment-password
         run: docker compose config --quiet
       - name: Build local image (no publication)
-        run: docker build -t evencomms:0.3.0 .
+        run: docker build -t evencomms:0.4.0 .
       - name: Install synthetic stream publisher
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - name: Container smoke test (no inference)
@@ -84,9 +133,9 @@ jobs:
           docker compose -p evencomms-umbrel-smoke -f deploy/umbrel/docker-compose.yml -f deploy/umbrel/ci.override.yml up -d --no-build --no-deps --wait --wait-timeout 90 server
           docker compose -p evencomms-umbrel-smoke -f deploy/umbrel/docker-compose.yml -f deploy/umbrel/ci.override.yml up -d --no-build --no-deps --wait --wait-timeout 90 mediamtx web
           ADMIN_PASSWORD="$APP_PASSWORD" python scripts/stream_smoke.py --base-url http://127.0.0.1:28197 --rtmp-host 127.0.0.1 --rtmp-port 21937 --browser --research
-      - name: Container logs on failure
+      - name: Container state on failure (no private raw logs)
         if: failure()
-        run: docker compose logs --no-color
+        run: docker compose ps --all
         env:
           ADMIN_PASSWORD: ci-only-not-a-deployment-password
       - name: Clean up CI data
