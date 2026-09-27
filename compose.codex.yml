@@ -11,7 +11,7 @@ services:
     build:
       context: .
       dockerfile: deploy/codex/Dockerfile
-    image: evencomms-codex:0.4.1
+    image: evencomms-codex:0.4.2
     pull_policy: never
     user: "10002:10002"
     init: true

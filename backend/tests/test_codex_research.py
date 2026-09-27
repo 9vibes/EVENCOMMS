@@ -12,7 +12,9 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from backend.codex_research import DEVICE_URL, LEASE_INTERVAL, LEASE_TTL, SESSION_TTL, disconnected
+from backend.codex_research import (
+    BRIDGE_ERROR_HEADER, BRIDGE_ERRORS, DEVICE_URL, LEASE_INTERVAL, LEASE_TTL, SESSION_TTL, disconnected,
+)
 from backend.config import Settings
 from backend.main import create_app, digest
 from backend.research import BODY_LIMIT, MODEL_TTL, PROVIDER_LIMIT, RESULT_TTL, Chat
@@ -512,7 +514,7 @@ def test_current_chat_wire_allowlist_partial_and_truncation(make_codex):
 
 
 @pytest.mark.parametrize("code,expected", [(400, 422), (401, 502), (403, 502), (404, 422), (409, 409),
-    (422, 422), (429, 429), (500, 502), (302, 502), (307, 502)])
+    (422, 422), (429, 429), (500, 502), (503, 503), (504, 504), (302, 502), (307, 502)])
 def test_errors_sanitized_no_backend_resubmission_or_paid_fallback(make_codex, code, expected, caplog):
     def handler(request):
         if request.url.path.endswith("/chat"):
@@ -535,6 +537,52 @@ def test_errors_sanitized_no_backend_resubmission_or_paid_fallback(make_codex, c
     assert TOKEN not in caplog.text and SECRET not in caplog.text
     assert not client.app.state.codex_research.sessions[parent(headers)].results
     assert not client.app.state.codex_research.chat_waiters
+
+
+def test_private_bridge_error_contract_matches_separately_packaged_service():
+    from codex_bridge.errors import ERROR_HEADER, ERRORS
+
+    assert BRIDGE_ERROR_HEADER == ERROR_HEADER
+    assert BRIDGE_ERRORS == ERRORS
+    assert all(status != 401 for status, _ in BRIDGE_ERRORS.values())
+
+
+@pytest.mark.parametrize("code", BRIDGE_ERRORS)
+def test_safe_bridge_cause_survives_without_body_or_credential_leak(make_codex, code, caplog):
+    status, message = BRIDGE_ERRORS[code]
+
+    def handler(request):
+        if request.url.path.endswith("/chat"):
+            return httpx.Response(status, text=SECRET + TOKEN,
+                                  headers={BRIDGE_ERROR_HEADER: code, "X-Private-Detail": SECRET})
+        return bridge(request)
+
+    client, headers, calls = make_codex(handler, openai_api_key="paid-server-key")
+    connect(client, headers)
+    response = client.post(ROOT + "/chat", headers=headers, json=payload())
+    assert response.status_code == status
+    assert message in response.json()["detail"] and f"[codex:{code}]" in response.text
+    assert "No paid API fallback" in response.text
+    assert SECRET not in response.text and TOKEN not in response.text
+    assert "X-Private-Detail" not in response.headers
+    assert SECRET not in caplog.text and TOKEN not in caplog.text
+    assert sum(request.url.path.endswith("/chat") for request in calls) == 1
+    assert client.get("/api/sessions", headers=headers).status_code == 200
+
+
+@pytest.mark.parametrize("code,status", [(SECRET, 502), ("rate_limit", 502), ("account_auth", 401),
+                                         ("model_unavailable ", 422), ("x" * 1024, 503)])
+def test_unrecognized_or_mismatched_bridge_diagnostic_is_not_trusted(make_codex, code, status):
+    def handler(request):
+        if request.url.path.endswith("/chat"):
+            return httpx.Response(status, text=SECRET, headers={BRIDGE_ERROR_HEADER: code})
+        return bridge(request)
+
+    client, headers, _ = make_codex(handler)
+    connect(client, headers)
+    response = client.post(ROOT + "/chat", headers=headers, json=payload())
+    assert SECRET not in response.text and f"[codex:{code}]" not in response.text
+    assert response.status_code != 401
 
 
 @pytest.mark.parametrize("exception,expected", [(httpx.ReadTimeout, 504), (httpx.ConnectError, 503)])

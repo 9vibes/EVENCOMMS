@@ -1,4 +1,4 @@
-# EVENCOMMS 0.4.1 Protocol
+# EVENCOMMS 0.4.2 Protocol
 
 All API requests use same-origin URLs by default. JSON responses unless noted.
 Bearer authentication uses `Authorization: Bearer <token>`, never URL parameters.
@@ -8,8 +8,10 @@ The original v0.1 wearer conversation, voice transcription and draft-ordering
 contracts below are unchanged. Streaming and Research are separate operator
 features; neither automatically sends a reply to the wearer.
 Version 0.4.0 introduced experimental Codex Research without changing the default
-API provider or existing optional OpenAI-key settings. The 0.4.1 device-login
-hotfix retains those contracts; see [hotfix notes](codex.md#041-hotfix) and
+API provider or existing optional OpenAI-key settings. The 0.4.2 reply-compatibility
+and diagnostics hotfix retains those contracts and the 0.4.1 device-login fixes;
+see [current hotfix notes](codex.md#042-hotfix),
+[historical login notes](codex.md#041-hotfix) and
 [release results](https://github.com/9vibes/EVENCOMMS/releases).
 
 ## HTTP
@@ -139,6 +141,19 @@ enforces one non-401 upstream Responses request per explicit Send; the pinned
 credential-recovery path permits up to three attempts after confirmed 401s.
 There is no automatic application resubmission. Manual retries can consume more
 allowance, even with the same UUID after a failure, cache expiry or restart.
+
+Generation uses the pinned native Responses Lite format, including one empty
+`additional_tools` prefix, embedded instructions and no reasoning summary. Known
+bounded metadata events are scoped to the active thread/turn and discarded, not
+treated as tool requests or returned as the answer. Unknown events, tools,
+approvals and actual model changes still fail closed.
+
+Bridge failures carry only an allowlisted `X-Evencomms-Codex-Error` code. The
+backend requires a matching HTTP status and constructs a fixed public detail
+with `[codex:code]`; it never returns raw bridge/provider bodies. This preserves
+quota, account/model access, policy, timeout, protocol and stream distinctions.
+Upstream authentication remains distinct from the local operator's HTTP 401.
+See [reply failures](codex.md#reply-failures) for the diagnostic codes.
 
 Message/image/body limits match API mode. Codex has its own two-worker validation
 pool; admission before body receipt permits at most two waiters per operator and

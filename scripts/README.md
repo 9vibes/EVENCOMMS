@@ -5,17 +5,19 @@ only the Python standard library on the host; WebSocket checks run with the
 image's installed dependencies. It never pulls or rebuilds the supplied image.
 
 ```sh
-python scripts/container_smoke.py --image evencomms:0.4.1
-python scripts/container_smoke.py --image evencomms:0.4.1 --speech-pcm /tmp/speech.pcm
+python scripts/container_smoke.py --image evencomms:0.4.2
+python scripts/container_smoke.py --image evencomms:0.4.2 --speech-pcm /tmp/speech.pcm
 ```
 
 Add `--upgrade-from <local-prior-image>` to seed the data/model cache with an
 already-pulled prior image before starting the candidate image on the same
 volumes. The 0.3.0 release used separate digest-pinned 0.1.0 and 0.2.1 upgrade
-checks as well as a fresh candidate. The 0.4.1 workflow retains those gates and the
-0.3.0 upgrade, and adds the published 0.4.0 app pinned to
+checks as well as a fresh candidate. The 0.4.1 workflow retained those gates and the
+0.3.0 upgrade, and added the published 0.4.0 app pinned to
 `ghcr.io/9vibes/evencomms:0.4.0@sha256:0b22e2b2d2967e55f244985ebc16cdac3426c852527f83398dce7b639b5e6d15`.
-Only the 0.4.0 gate adds `--upgrade-private-auth`: it first runs that image's
+The 0.4.2 workflow retains all of those gates and adds the published 0.4.1 app:
+`ghcr.io/9vibes/evencomms:0.4.1@sha256:bb72aa606eaa2dd217dfd80076c121449b5d05bb897996aa540d4cd346f941ab`.
+Both the 0.4.0 and 0.4.1 gates use `--upgrade-private-auth`: each first runs that image's
 private-auth initializer on the same volumes, then the candidate's `INIT_CHECK`
 hashes the existing token internally and requires unchanged bytes and correct
 permissions across repeated initialization. The old app boots after candidate
@@ -57,7 +59,7 @@ test. Model hosting/network failures fail the release rather than bypass STT.
 
 ## Real RTMP/HLS Smoke
 
-`stream_smoke.py` tests an **already running, isolated** 0.4.1 stack:
+`stream_smoke.py` tests an **already running, isolated** 0.4.2 stack:
 backend + public nginx ingress + MediaMTX. It never starts/rebuilds containers,
 changes settings, connects to a default preview URL, or stops an existing encoder.
 See [streaming deployment and API contracts](../docs/streaming.md). Use nginx's
@@ -229,14 +231,23 @@ locked npm assets and run the real-binary probe from the repository root:
 npm ci --prefix codex_bridge --ignore-scripts --no-audit --no-fund
 python scripts/check_codex_runtime.py --binary codex_bridge/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex --temp-parent /tmp
 PATH="$PWD/codex_bridge/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin:$PATH" python -m pytest backend/tests/test_codex_bridge.py -k offline_pinned_binary_device_login_uses_production_session
+PATH="$PWD/codex_bridge/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin:$PATH" python -m pytest backend/tests/test_codex_native_chat.py
 ```
 
-The pytest command exercises the production `Session` device-login path with the
+The first pytest command exercises the production `Session` device-login path with the
 real native binary and an offline nine-digit code fixture, not a mocked runtime
-or real OpenAI account. It requires the pinned binary on `PATH`; otherwise the
-normal backend suite skips this one test. The dedicated Codex CI job installs the
-locked assets and explicitly sets `PATH` before running it, so its result must be
-a pass rather than a skip.
+or real OpenAI account. The second runs all 15 full native-chat pipeline cases
+through the real backend, bridge, production Session/Generation, pinned binary
+and real relay. It covers both models, JPEG history, scoped metadata/reasoning/text
+deltas, safe quota/model/stream/tool diagnostics, and native workspace discovery
+before forwarding, including routing changes after credential refresh. Native
+runtime version metadata and the upstream `version` header remain `0.157.1`,
+not the application's `0.4.2` client metadata version.
+These tests require the pinned binary on `PATH`; otherwise the normal backend
+suite skips 16 cases (one login plus 15 native chat), not just the login test.
+The dedicated Codex CI job installs the locked assets and explicitly sets `PATH`
+before running both commands, so all 16 must pass rather than skip. Account access
+and the cause of a historical generic failure on a user's host are not established.
 
 The probe uses loopback OAuth and Responses fixtures. It checks digest/schema,
 ephemeral synthetic login, both pinned model selectors, zero tool registration,
@@ -293,7 +304,7 @@ identities and their source revision:
 ```sh
 python scripts/codex_container_smoke.py \
   --image "$APP_IMAGE_ID" --codex-image "$CODEX_IMAGE_ID" \
-  --version 0.4.1 --revision "$REVISION" \
+  --version 0.4.2 --revision "$REVISION" \
   --source https://github.com/9vibes/EVENCOMMS --browser
 ```
 
@@ -310,13 +321,14 @@ These are synthetic checks, not live-account login, inference or entitlement tes
 
 ## Publication
 
-The source version is **0.4.1**, a [device-login hotfix](../docs/codex.md#041-hotfix)
-for Codex Research introduced in 0.4.0; Codex remains **experimental**.
+The source version is **0.4.2**, a [reply-compatibility and diagnostics hotfix](../docs/codex.md#042-hotfix)
+for Codex Research introduced in 0.4.0. It retains the
+[0.4.1 device-login fixes](../docs/codex.md#041-hotfix); Codex remains **experimental**.
 The [release page](https://github.com/9vibes/EVENCOMMS/releases),
 [CI runs](https://github.com/9vibes/EVENCOMMS/actions) and canonical
 [KNS-Umbrel package](https://github.com/9vibes/KNS-Umbrel/tree/master/kunas-evencomms)
-record actual publication and verification status. Local `evencomms:0.4.1` and
-`evencomms-codex:0.4.1` are not registry references. After each release run, record
+record actual publication and verification status. Local `evencomms:0.4.2` and
+`evencomms-codex:0.4.2` are not registry references. After each release run, record
 its actual outcome and both verified digests rather than inferring success from
 this checklist. Live OpenAI and physical-device acceptance are not established
 by these scripts.
@@ -331,19 +343,19 @@ not the application's SemVer. Stable SemVer
 and SemVer prereleases are supported, but build metadata is rejected because
 Docker tags cannot contain `+`. No source tags are created or changed.
 
-The 0.4.1 release workflow builds **linux/amd64 only** on Ubuntu 24.04, labels both
+The 0.4.2 release workflow builds **linux/amd64 only** on Ubuntu 24.04, labels both
 images with source, revision and version, smoke-tests the app's exact local image
 ID with real CPU STT, and verifies the isolated bridge's actual generation gate.
 Only the exact tested images may be published using `GITHUB_TOKEN` with
 `packages: write`. Both tags belong to the **same existing public GHCR package**:
 
-- App/init: `ghcr.io/9vibes/evencomms:0.4.1` (`:<version>`).
-- Bridge: `ghcr.io/9vibes/evencomms:0.4.1-codex` (`:<version>-codex`).
+- App/init: `ghcr.io/9vibes/evencomms:0.4.2` (`:<version>`).
+- Bridge: `ghcr.io/9vibes/evencomms:0.4.2-codex` (`:<version>-codex`).
 
 Do not create a separate registry package for the bridge. There are no `latest`,
 moving minor-version or ARM tags. Official Codex `0.157.1` dependencies and binary
 hashes are unchanged by this app version bump.
-Do not retag or replace either published 0.4.0 image.
+Do not retag or replace any prior release, including either published 0.4.0 or 0.4.1 image.
 
 Publication is serialized. An authenticated registry check rejects existing
 tags for both images and fails closed on authentication, network, and unexpected registry

@@ -6,6 +6,8 @@
       "base_instructions": "You are a research assistant. You have no tools, workspace, live feed, audio or web access.",
       "description": "Fast and affordable model for easier tasks.",
       "default_reasoning_level": "medium",
+      "default_reasoning_summary": "none",
+      "use_responses_lite": true,
       "supported_reasoning_levels": [
         {"effort": "low", "description": "Fast responses with lighter reasoning"},
         {"effort": "medium", "description": "Balances speed and reasoning depth for everyday tasks"},
@@ -38,6 +40,8 @@
       "base_instructions": "You are a research assistant. You have no tools, workspace, live feed, audio or web access.",
       "description": "Frontier intelligence for the most demanding work.",
       "default_reasoning_level": "low",
+      "default_reasoning_summary": "none",
+      "use_responses_lite": true,
       "supported_reasoning_levels": [
         {"effort": "low", "description": "Fast responses with lighter reasoning"},
         {"effort": "medium", "description": "Balances speed and reasoning depth for everyday tasks"},

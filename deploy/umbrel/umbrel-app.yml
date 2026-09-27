@@ -3,11 +3,11 @@ id: kunas-evencomms
 name: EVENCOMMS
 tagline: Local conversations between Even glasses and an operator
 category: social
-version: "0.4.1"
+version: "0.4.2"
 port: 28097
 description: >-
-  SOURCE STAGING PACKAGE. The 0.4.1 device-login hotfix uses local source builds of
-  evencomms:0.4.1 and evencomms-codex:0.4.1; use KNS-Umbrel for the
+  SOURCE STAGING PACKAGE. The 0.4.2 reply-compatibility and diagnostics hotfix uses local source builds of
+  evencomms:0.4.2 and evencomms-codex:0.4.2; use KNS-Umbrel for the
   digest-pinned installable release package and check actual release results.
   Pair an Even Hub client with a
   browser operator, transcribe short English utterances locally on CPU,
@@ -45,7 +45,21 @@ dependencies: []
 defaultUsername: ""
 deterministicPassword: true
 releaseNotes: >-
-  0.4.1 fixes device login for experimental Codex Research introduced in 0.4.0.
+  0.4.2 fixes reply compatibility and adds safe diagnostics for experimental Codex
+  Research introduced in 0.4.0. Preserves native Responses Lite, reasoning summary
+  none and the truthful Codex 0.157.1 upstream version header; the prior sanitized
+  catalog unintentionally changed the native wire protocol. Valid scoped metadata
+  and streaming deltas are accepted, but tools, approvals, unknown events and model
+  changes remain blocked. Fixed diagnostics such as [codex:rate_limit] replace
+  generic failures without exposing provider bodies, native logs, account details
+  or secrets. Native account/read checks workspace routing before every upstream
+  attempt, including after credential refresh. Unsupported regional routing fails
+  closed with no arbitrary backend fallback. Removes the hidden 15-second relay
+  read cutoff while retaining the 85-second end-to-end generation budget.
+  A synthetic reproduction showed valid replies rejected by the old Generation
+  handler succeeding with the fix; it does not prove the exact cause on a user's
+  host or establish real OpenAI account verification.
+  Retains the 0.4.1 device-login fixes and unchanged API-key HTTPS guard.
   Get Codex login code is available on the default HTTP Umbrel console after an
   explicit trusted-network confirmation. This is Codex-only; API-key entry still
   requires HTTPS or exact localhost/loopback, and console HTTP remains unencrypted.
@@ -59,7 +73,7 @@ releaseNotes: >-
   stays installed and idle, with account use opt-in. No new directories, networks,
   ports or resource-limit changes. API mode remains the UI default; existing
   optional OpenAI keys and settings remain unchanged. Rebuild/redeploy the full
-  stack, including both 0.4.1 images, without retagging 0.4.0. Initialization installs
+  stack, including both 0.4.2 images, without retagging 0.4.0 or 0.4.1. Initialization installs
   bundled nginx and MediaMTX configs and preserves the existing private token. Back up
   codex-auth alongside app data, never account tokens. Update in place, preserving
   app ID, web port 28097, RTMP port 21936, password, user data, model cache and stream secrets.

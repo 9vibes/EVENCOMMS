@@ -6,7 +6,7 @@ glasses. No continuous video, audio, stream key, or unsent wearer draft is sent 
 OpenAI. Capturing a frame only adds a local draft attachment; Send is explicit.
 
 This page describes the **OpenAI API key** connection introduced in 0.3.0 and
-retained as the default in 0.4.1. The **ChatGPT account
+retained as the default in 0.4.2. The **ChatGPT account
 (Experimental Codex)** option has separate authentication, eligible-plan allowance
 and retention behavior. It remains experimental, with no model-entitlement
 guarantee. See [its setup and privacy guide](codex.md).

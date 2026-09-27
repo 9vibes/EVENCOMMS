@@ -19,9 +19,10 @@ from urllib.parse import urlsplit
 
 from PIL import Image
 
+from .errors import Failure
 from .generation import Generation
 from .policy import (
-    AUTH_RECOVERY_PHASES, MODEL_PROOF_FIELDS, MODELS, REQUIRED_PROOFS, USER_CODE_PATTERN, VERSION,
+    AUTH_RECOVERY_PHASES, INSTRUCTIONS, MODEL_PROOF_FIELDS, MODELS, REQUIRED_PROOFS, USER_CODE_PATTERN, VERSION,
     generation_allowed, history_items,
 )
 from .rpc import Runtime, ProtocolError, WIRE_LIMIT, child_environment
@@ -59,6 +60,7 @@ async def check_schema(binary, parent):
                 "TurnStartParams": {"environments", "input"},
                 "ThreadInjectItemsParams": {"threadId", "items"},
                 "LoginAccountResponse": set(),
+                "GetAccountResponse": {"account", "requiresOpenaiAuth", "workspaceRouting"},
             }.items():
                 data = json.loads((home / "schema" / "v2" / (name + ".json")).read_text())
                 if not fields <= data.get("properties", {}).keys():
@@ -81,6 +83,7 @@ async def run_probe(binary, *, temp_parent="/tmp"):
     work = None
     handlers = set()
     seen = []
+    response_events = set()
     violation = None
     violation_context = None
     state = "disconnected"
@@ -97,6 +100,7 @@ async def run_probe(binary, *, temp_parent="/tmp"):
     delayed_events = []
     delay_events = False
     proofs = dict.fromkeys(MODEL_PROOF_FIELDS, True)
+    proofs["response_events_verified"] = False
 
     output = io.BytesIO()
     Image.new("RGB", (2, 2), (123, 45, 67)).save(output, format="JPEG")
@@ -200,13 +204,36 @@ async def run_probe(binary, *, temp_parent="/tmp"):
                 request = json.loads(raw)
                 if request.get("model") != data.model or state != "connected":
                     raise ProtocolError()
-                items = [item for item in request.get("input", []) if item.get("role") in {"user", "assistant"}]
-                proofs["tools_empty"] &= request.get("tools") == []
+                # Independent native-wire assertions, deliberately not decode_request.
+                # A permissive relay must not be able to make this proof pass.
+                wire = request["input"]
+                prefix, base, skills = wire[:3]
+                proofs["tools_empty"] &= ("tools" not in request
+                    and prefix == {"type": "additional_tools", "id": prefix.get("id"), "role": "developer", "tools": []}
+                    and isinstance(prefix.get("id"), str) and prefix["id"].startswith("at_")
+                    and all(item.get("type") == "message" for item in wire[1:]))
+                proofs["lite_wire"] &= ("instructions" not in request and request.get("tool_choice") == "auto"
+                    and request.get("parallel_tool_calls") is False and request.get("stream") is True
+                    and request.get("store") is False
+                    and request.get("reasoning") == {"effort": "medium" if data.model == "gpt-6-luna" else "low",
+                                                    "context": "all_turns"}
+                    and normalize([base]) == [{"role": "developer", "content": [{"type": "input_text", "text": INSTRUCTIONS}]}]
+                    and base.get("internal_chat_message_metadata_passthrough", {}).get("content_item_kinds") == ["model.base_instructions"]
+                    and skills.get("role") == "developer" and len(skills.get("content", [])) == 1
+                    and skills["content"][0].get("type") == "input_text"
+                    and skills.get("internal_chat_message_metadata_passthrough", {}).get("content_item_kinds") == ["host_skills.instructions"])
+                proofs["native_headers"] &= (headers.get("version") == "0.157.1"
+                    and headers.get("x-openai-internal-codex-responses-lite") == "true"
+                    and headers.get("originator") == "evencomms_codex_bridge"
+                    and headers.get("user-agent", "").startswith("evencomms_codex_bridge/0.157.1")
+                    and headers.get("accept") == "text/event-stream" and headers.get("accept-encoding") == "identity"
+                    and headers.get("thread-id") == headers.get("x-client-request-id") == active.thread_id)
+                items = wire[3:]
                 proofs["history_roles_exact"] &= normalize(items) == expected_history
                 proofs["images_verified"] &= sum(part.get("type") == "input_image" and part.get("image_url") == image
                                                 for item in items for part in item["content"]) == 6
                 report.update(proofs)
-                if not all(proofs.values()):
+                if not all(value for key, value in proofs.items() if key != "response_events_verified"):
                     raise ProtocolError()
                 request_received.set()
                 attempts = sum(phase.startswith("responses:") for phase in phases)
@@ -231,6 +258,31 @@ async def run_probe(binary, *, temp_parent="/tmp"):
                         {"type": "response.completed", "response": {"id": "resp_probe", "status": "completed",
                          "output": [item], "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}}},
                     ]
+                    if case != "tool":
+                        reasoning = {"type": "reasoning", "id": "rs_probe", "summary": [],
+                                     "content": [{"type": "reasoning_text", "text": "Offline reasoning."}]}
+                        events[1:2] = [
+                            {"type": "response.metadata", "response_id": "resp_probe", "metadata": {
+                                "openai_verification_recommendation": ["trusted_access_for_cyber"],
+                                "openai_chatgpt_moderation_metadata": {"presentation": "inline"},
+                            }},
+                            {"type": "response.metadata", "response_id": "resp_probe", "metadata": {
+                                "type": "safety_buffering", "use_cases": ["cyber"], "reasons": ["user_risk"],
+                                "retry_model": None,
+                            }},
+                            {"type": "response.output_item.added", "output_index": 0,
+                             "item": {"type": "reasoning", "id": "rs_probe", "summary": []}},
+                            {"type": "response.reasoning_text.delta", "item_id": "rs_probe", "output_index": 0,
+                             "content_index": 0, "delta": "Offline reasoning."},
+                            {"type": "response.output_item.done", "output_index": 0, "item": reasoning},
+                            {"type": "response.output_item.added", "output_index": 1, "item": {**item, "content": []}},
+                            {"type": "response.output_text.delta", "item_id": "msg_probe", "output_index": 1,
+                             "content_index": 0, "delta": "Offline probe "},
+                            {"type": "response.output_text.delta", "item_id": "msg_probe", "output_index": 1,
+                             "content_index": 0, "delta": "answer."},
+                        ]
+                        events[-2]["output_index"] = 1
+                        events[-1]["response"]["output"] = [reasoning, item]
                     body = "".join("data: " + json.dumps(event) + "\n\n" for event in events).encode()
                     writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\nContent-Length: "
                                  + str(len(body)).encode() + b"\r\n\r\n" + body)
@@ -258,6 +310,9 @@ async def run_probe(binary, *, temp_parent="/tmp"):
             return
         if method not in seen and len(seen) < 64:
             seen.append(method)
+        if method in {"model/verification", "turn/moderationMetadata", "model/safetyBuffering/updated",
+                      "item/reasoning/textDelta", "item/agentMessage/delta"}:
+            response_events.add(method)
         if method == "bridge/failed":
             state = "failed"
             login_done.set()
@@ -282,7 +337,7 @@ async def run_probe(binary, *, temp_parent="/tmp"):
         if active is not None:
             try:
                 active.event(method, params)
-            except Exception:
+            except Exception as error:
                 violation = method
                 # IDs, message contents, image data and provider errors never
                 # enter diagnostics. These labels distinguish ordering failures.
@@ -297,7 +352,7 @@ async def run_probe(binary, *, temp_parent="/tmp"):
                     "role": item.get("role") if item.get("role") in ("user", "assistant", "developer", "system") else "other",
                     "replay_remaining": len(active.replay or ()),
                 }
-                active.fail()
+                active.fail(error)
                 raise
 
     async def check_stale_path(url):
@@ -337,6 +392,7 @@ async def run_probe(binary, *, temp_parent="/tmp"):
             stage = case + "/" + model + "/login"
             state, violation, violation_context, completion, revoked = "pending", None, None, None, False
             phases, exchanges, revocations = [], 0, 0
+            response_events.clear()
             login_done.clear()
             request_received.clear()
             runtime = Runtime(binary, event, temp_parent=temp_parent, probe_origin=origin,
@@ -355,7 +411,11 @@ async def run_probe(binary, *, temp_parent="/tmp"):
                 await login_done.wait()
             account = await runtime.call("account/read", {"refreshToken": False})
             if (completion != (login.get("loginId"), True) or account.get("account", {}).get("type") != "chatgpt"
-                    or account.get("requiresOpenaiAuth") is not True or phases or exchanges != 1):
+                    or account.get("requiresOpenaiAuth") is not True or phases or exchanges != 1
+                    or account.get("workspaceRouting") != {
+                        "chatgptAccountId": "offline-account", "backendOrigin": origin.replace("http:", "https:", 1),
+                        "accountRoutingOverride": "NO_CONSTRAINT",
+                    }):
                 raise ProtocolError()
             state = "connected"
             report["synthetic_device_login"] = True
@@ -391,22 +451,24 @@ async def run_probe(binary, *, temp_parent="/tmp"):
                     for method, params in delayed_events:
                         try:
                             event(method, params)
-                        except ProtocolError:
+                        except Failure:
                             runtime.abort()
                             event("bridge/failed", {})
                             break
                     delayed_events.clear()
                 if case == "revoke":
                     await request_received.wait()
-                    with contextlib.suppress(ProtocolError):
+                    with contextlib.suppress(Failure):
                         await runtime.call("account/logout", timeout=3)
                 try:
                     result = await work
-                except ProtocolError:
+                except Failure:
                     pass
             success = case in {"text", "auth_reload_success", "auth_refresh_success"}
             if success:
-                if result is None or result["text"] != "Offline probe answer." or state != "connected":
+                proofs["response_events_verified"] = len(response_events) == 5
+                if (result is None or result["text"] != "Offline probe answer." or state != "connected"
+                        or not proofs["response_events_verified"]):
                     raise ProtocolError()
                 account = await runtime.call("account/read", {"refreshToken": False})
                 if account.get("account", {}).get("type") != "chatgpt" or state != "connected":

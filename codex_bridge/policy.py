@@ -51,7 +51,8 @@ AUTH_RECOVERY_PHASES = {
     "auth_refresh_success": ("responses:initial", "responses:initial", "oauth:refresh", "responses:refreshed"),
     "auth_refresh_exhausted": ("responses:initial", "responses:initial", "oauth:refresh", "responses:refreshed"),
 }
-MODEL_PROOF_FIELDS = ("tools_empty", "history_roles_exact", "images_verified")
+MODEL_PROOF_FIELDS = ("tools_empty", "lite_wire", "native_headers", "history_roles_exact", "images_verified",
+                      "response_events_verified")
 REQUIRED_PROOFS = (
     "binary_verified", "schema_verified", "account_disconnected", "synthetic_device_login",
     "authenticated_provider", "catalog_for_alias", *MODEL_PROOF_FIELDS,
@@ -116,6 +117,8 @@ def configuration(relay_url="http://127.0.0.1:1/unarmed"):
         "model_providers.evencomms.name": "OpenAI",
         "model_providers.evencomms.base_url": relay_url,
         "model_providers.evencomms.wire_api": "responses",
+        # Mirror the built-in provider's native runtime version, not clientInfo.
+        "model_providers.evencomms.http_headers.version": VERSION,
         "model_providers.evencomms.requires_openai_auth": True,
         "model_providers.evencomms.request_max_retries": 0,
         "model_providers.evencomms.stream_max_retries": 0,

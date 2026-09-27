@@ -16,6 +16,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
+from .errors import ERROR_HEADER, Failure
 from .generation import Generation
 from .policy import BRIDGE_TOKEN_PATTERN, DEVICE_URL, MODELS, USER_CODE_PATTERN, generation_allowed
 from .private_token import load_token_file
@@ -31,11 +32,18 @@ CHAT_SECONDS = 85
 THREAD_CAP = 8
 BINARY_VERIFY_SECONDS = 10
 PROBE_SECONDS = 75
+CLEANUP_SECONDS = 5
 RETRY_WARNING = (
     " The bridge does not automatically resubmit failed generation. "
     "Codex may retry during bounded OAuth credential recovery. "
     "No paid API fallback; sign in again before retrying manually."
 )
+
+
+def http_failure(code, *, retry=False):
+    error = Failure(code)
+    return HTTPException(error.status, str(error) + (RETRY_WARNING if retry else ""),
+                         headers={ERROR_HEADER: error.code})
 
 
 async def body(request, limit):
@@ -63,6 +71,7 @@ class Session:
         self.lease = self.created + LEASE_SECONDS
         self.state = "pending"
         self.reason = None
+        self.failure = None
         self.verification_url = None
         self.user_code = None
         self.login_id = None
@@ -81,22 +90,28 @@ class Session:
         return {"state": self.state, "verification_url": self.verification_url, "user_code": self.user_code,
                 "generation_enabled": self.state == "connected" and self.manager.generation_enabled}
 
-    def fail(self, reason="runtime"):
+    def fail(self, reason="runtime", error=None):
         self.state = "failed"
-        self.reason = reason
+        self.reason = self.reason or reason
         self.verification_url = self.user_code = None
         self.ready.set()
         self.login_done.set()
-        if self.generation:
-            self.generation.fail()
+        if self.failure is None:
+            if self.generation:
+                error = self.generation.fail(error)
+            self.failure = (error.code if isinstance(error, Failure)
+                            else getattr(self.runtime, "failure", None) or "runtime_error")
+        # Record before abort wakes pending calls or kills the event reader.
+        self.runtime.failure = self.failure
         self.runtime.abort()
+        return Failure(self.failure)
 
     def event(self, method, params):
         try:
             if not isinstance(params, dict):
                 raise ProtocolError()
             if method == "bridge/failed":
-                self.fail()
+                self.fail(error=Failure(getattr(self.runtime, "failure", None)))
             elif method == "account/login/completed":
                 identity = params.get("loginId")
                 if (self.state != "pending" or not isinstance(identity, str) or str(UUID(identity)) != identity
@@ -122,9 +137,9 @@ class Session:
                 self.generation.event(method, params)
             elif method != "thread/status/changed":
                 raise ProtocolError()
-        except Exception:
-            self.fail()
-            raise ProtocolError() from None
+        except Exception as error:
+            failure = self.fail(error=error if isinstance(error, Failure) else ProtocolError())
+            raise ProtocolError(failure.code) from None
 
     async def login(self):
         try:
@@ -161,7 +176,8 @@ class Session:
             # Keep the failed reservation if cleanup needs a later retry, but
             # never leave a credential-bearing task exception unobserved.
             with contextlib.suppress(Exception):
-                await self.runtime.close(logout=False)
+                async with asyncio.timeout(CLEANUP_SECONDS):
+                    await self.runtime.close(logout=False)
         finally:
             if self.state != "pending":
                 self.verification_url = self.user_code = None
@@ -181,12 +197,14 @@ class Session:
                     if not task.done():
                         task.cancel()
                 if self.generation:
-                    self.generation.fail()
+                    self.generation.done.cancel()
                 # Logout is best effort and bounded; process reaping precedes rmdir.
                 try:
-                    await self.runtime.close()
+                    async with asyncio.timeout(CLEANUP_SECONDS):
+                        await self.runtime.close()
                 finally:
-                    await asyncio.gather(*tasks, return_exceptions=True)
+                    async with asyncio.timeout(CLEANUP_SECONDS):
+                        await asyncio.gather(*tasks, return_exceptions=True)
                     self.login_task = self.active = self.generation = None
                     self.results.clear()
             self.cleanup = asyncio.create_task(cleanup())
@@ -238,7 +256,7 @@ class Bridge:
         await self.prune()
         async with self.lock:
             if self.closed or not self.binary_verified:
-                raise HTTPException(503, "Pinned Codex runtime is unavailable")
+                raise http_failure("generation_disabled")
             session = self.sessions.get(identity)
             if session and session.state == "failed":
                 await session.stop()
@@ -282,7 +300,7 @@ class Bridge:
         if not session or session.state != "connected":
             raise HTTPException(409, "Connect a ChatGPT account before chatting")
         if not self.generation_enabled:
-            raise HTTPException(503, "Codex generation is disabled: runtime safety probe did not pass")
+            raise http_failure("generation_disabled")
         if session.active is not None:
             raise HTTPException(429, "A Codex request is already active for this session")
         if len(self.validations) >= 2:
@@ -341,18 +359,19 @@ class Bridge:
             raise
         except asyncio.CancelledError:
             session.fail()
-            await session.stop()
+            with contextlib.suppress(Exception):
+                await session.stop()
             if asyncio.current_task().cancelling():
                 raise
             raise HTTPException(409, "Codex request was cancelled") from None
-        except TimeoutError:
-            session.fail()
-            await session.stop()
-            raise HTTPException(504, "Codex request timed out." + RETRY_WARNING) from None
-        except Exception:
-            session.fail()
-            await session.stop()
-            raise HTTPException(502, "Codex request failed or an unsafe runtime event was rejected." + RETRY_WARNING) from None
+        except Exception as error:
+            failure = session.fail(error=error if isinstance(error, Failure) else Failure(
+                "timeout" if isinstance(error, TimeoutError) else "runtime_error"))
+            # A failed cleanup keeps its admission slot; it must not replace the
+            # original safe diagnostic with a generic exception or private text.
+            with contextlib.suppress(Exception):
+                await session.stop()
+            raise http_failure(failure.code, retry=True) from None
         finally:
             # Retain admission through result handling and eighth-thread logout,
             # even if the worker finished before its HTTP waiter resumed.
@@ -399,11 +418,14 @@ class PrivateBoundary:
         self.active += 1
         try:
             await self.app(scope, receive, private_send)
-        except Exception:
+        except Exception as error:
             # Never let provider messages, request bodies or credential-bearing
             # exception representations reach HTTP or uvicorn's error logger.
             if not started:
-                await JSONResponse({"detail": "Bridge request failed"}, 502)(scope, receive, private_send)
+                failure = Failure(error.code if isinstance(error, Failure) else "runtime_error")
+                warning = RETRY_WARNING if scope["path"].endswith("/chat") else ""
+                await JSONResponse({"detail": str(failure) + warning}, failure.status,
+                                   headers={ERROR_HEADER: failure.code})(scope, receive, private_send)
         finally:
             self.active -= 1
 

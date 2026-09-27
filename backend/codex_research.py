@@ -23,6 +23,29 @@ RETRY_WARNING = (
     " Retrying may consume additional plan allowance. Codex may retry during sign-in recovery."
     " No paid API fallback."
 )
+BRIDGE_ERROR_HEADER = "X-Evencomms-Codex-Error"
+# The images are independently packaged. Accept only this private wire contract,
+# never a bridge/provider error body. Tests keep this table aligned with the bridge.
+BRIDGE_ERRORS = {
+    "rate_limit": (429, "Codex allowance or rate limit reached. Check your ChatGPT usage limits before retrying."),
+    "account_auth": (409, "ChatGPT authentication could not be recovered. Disconnect and sign in again."),
+    "account_permission": (403, "OpenAI denied access to this request. Check your account and workspace permissions."),
+    "model_unavailable": (422, "The selected Codex model is unavailable to this account. Check your plan's model access."),
+    "request_rejected": (422, "OpenAI rejected the Codex request. Model or input compatibility may differ."),
+    "context_limit": (422, "Codex rejected the conversation size or session budget. Start a new chat with less context."),
+    "policy_rejected": (403, "OpenAI declined this request under its policy. No alternate model or provider was tried."),
+    "provider_unavailable": (503, "The OpenAI Codex service could not complete the request."),
+    "network_error": (503, "The bridge could not reach the OpenAI Codex service."),
+    "timeout": (504, "The Codex request exceeded its response deadline."),
+    "stream_incomplete": (502, "The Codex response stream ended before a complete reply was received."),
+    "response_encoding": (502, "OpenAI returned an unsupported response encoding. The bridge did not forward it."),
+    "protocol_mismatch": (502, "The Codex runtime and bridge request/response formats did not match."),
+    "tool_rejected": (502, "Codex requested a tool or approval that Research does not permit. No tool was approved."),
+    "model_changed": (422, "OpenAI selected a different model. Research discarded the response instead of switching models."),
+    "unsupported_workspace": (422, "This account requires routing that the isolated Codex bridge does not support."),
+    "generation_disabled": (503, "The Codex generation safety check did not pass. Sending remains disabled."),
+    "runtime_error": (502, "The Codex runtime stopped before returning a complete reply."),
+}
 
 
 def disconnected(enabled=True):
@@ -255,13 +278,25 @@ class CodexResearch:
                 status = response.status_code
                 allowed = {204} if method == "DELETE" else {200}
                 if status not in allowed:
+                    code = response.headers.get(BRIDGE_ERROR_HEADER, "")
+                    failure = BRIDGE_ERRORS.get(code)
+                    if failure and status == failure[0]:
+                        raise HTTPException(status, failure[1] + f" [codex:{code}]" + RETRY_WARNING)
+                    if status in {401, 403}:
+                        raise HTTPException(502, "Codex bridge service authentication failed. Recreate the updated app stack."
+                                            " [codex:bridge_auth]" + RETRY_WARNING)
+                    if status == 503:
+                        raise HTTPException(503, "Codex bridge is unavailable or busy. [codex:bridge_unavailable]" + RETRY_WARNING)
+                    if status == 504:
+                        raise HTTPException(504, "Codex bridge request timed out. [codex:timeout]" + RETRY_WARNING)
                     if status == 429:
                         raise HTTPException(429, "Codex rate, allowance or capacity limit reached." + RETRY_WARNING)
                     if status in {400, 404, 422}:
                         raise HTTPException(422, "Codex rejected the request; check connection and model compatibility." + RETRY_WARNING)
                     if status == 409:
                         raise HTTPException(409, "Codex is not ready; check the account connection and generation setting." + RETRY_WARNING)
-                    raise HTTPException(502, "Codex bridge request failed." + RETRY_WARNING)
+                    raise HTTPException(502, f"Codex bridge returned HTTP {status} without a recognized diagnosis."
+                                        " [codex:bridge_http_error]" + RETRY_WARNING)
                 if response.headers.get("content-encoding", "identity").lower() != "identity":
                     raise ValueError()
                 size = response.headers.get("content-length")

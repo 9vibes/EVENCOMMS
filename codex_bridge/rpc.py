@@ -9,6 +9,7 @@ import re
 import signal
 import tempfile
 
+from .errors import ERRORS, Failure
 from .policy import VERSION, config_args, configuration
 from .relay import Relay
 
@@ -17,9 +18,9 @@ WIRE_LIMIT = 10 * 1024 * 1024
 RPC_TIMEOUT = 15
 
 
-class ProtocolError(Exception):
-    def __init__(self):
-        super().__init__("Codex runtime protocol failure")
+class ProtocolError(Failure):
+    def __init__(self, code="protocol_mismatch"):
+        super().__init__(code)
 
 
 def child_environment(home):
@@ -42,18 +43,20 @@ class Runtime:
         self.probe_config = probe_config
         self.probe_origin = probe_origin
         self.probe_upstream = probe_upstream
-        self.relay = Relay(probe_origin=probe_upstream)
+        self.relay = Relay(check_workspace=self.check_workspace, probe_origin=probe_upstream)
         self.directory = None
         self.process = None
         self.reader = None
         self.pending = {}
         self.sequence = 0
+        self.workspace_request = None
         self.failed = False
         self.closing = False
         self.write_lock = asyncio.Lock()
         self.close_lock = asyncio.Lock()
         self.event_count = 0
         self.failure_reason = None
+        self.failure = None
 
     async def start(self):
         # Container has no system/project config. Reject any accidental host
@@ -100,7 +103,7 @@ class Runtime:
                 raise
             self.reader = asyncio.create_task(self.read_loop())
             result = await self.call("initialize", {
-                "clientInfo": {"name": "evencomms_codex_bridge", "title": "EVENCOMMS Research Prototype", "version": "0.4.1"},
+                "clientInfo": {"name": "evencomms_codex_bridge", "title": "EVENCOMMS Research Prototype", "version": "0.4.2"},
                 "capabilities": {"experimentalApi": True},
             })
             if not isinstance(result, dict) or VERSION not in result.get("userAgent", ""):
@@ -108,54 +111,97 @@ class Runtime:
             await self.send({"method": "initialized", "params": {}})
             return result
         except BaseException:
-            await self.close(logout=False)
+            with contextlib.suppress(Exception):
+                async with asyncio.timeout(5):
+                    await self.close(logout=False)
             raise
 
     async def send(self, message):
         if self.failed or not self.process or self.process.returncode is not None:
-            raise ProtocolError()
+            raise ProtocolError(self.failure or "runtime_error")
         data = json.dumps(message, ensure_ascii=True, separators=(",", ":"), allow_nan=False).encode() + b"\n"
         if len(data) > WIRE_LIMIT:
-            self.abort()
+            self.abort(ProtocolError())
             raise ProtocolError()
         try:
             async with asyncio.timeout(3), self.write_lock:
                 self.process.stdin.write(data)
                 await self.process.stdin.drain()
-        except (OSError, TimeoutError):
-            self.abort()
-            raise ProtocolError() from None
+        except (OSError, TimeoutError) as error:
+            self.abort(ProtocolError("timeout" if isinstance(error, TimeoutError) else "runtime_error"))
+            raise ProtocolError(self.failure) from None
 
-    async def call(self, method, params=None, *, timeout=RPC_TIMEOUT):
-        if len(self.pending) >= 4 or self.failed:
+    async def check_workspace(self, account_id):
+        try:
+            result = await self.call("account/read", {"refreshToken": False}, _workspace_check=True)
+        except Exception as error:
+            raise Failure("account_auth" if isinstance(error, Failure) and error.code == "account_auth"
+                          else "unsupported_workspace") from None
+        if not isinstance(result, dict):
+            raise Failure("unsupported_workspace")
+        account = result.get("account")
+        if (not isinstance(account, dict) or account.get("type") != "chatgpt"
+                or result.get("requiresOpenaiAuth") is not True):
+            raise Failure("account_auth")
+        routing = result.get("workspaceRouting")
+        if (not isinstance(routing, dict)
+                or set(routing) != {"chatgptAccountId", "backendOrigin", "accountRoutingOverride"}
+                or not isinstance(routing.get("chatgptAccountId"), str)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{1,256}", routing["chatgptAccountId"])):
+            raise Failure("unsupported_workspace")
+        if routing["chatgptAccountId"] != account_id:
+            raise Failure("account_auth")
+        # Never derive production destinations from config, discovery or headers.
+        # The only extra origin is the already-validated internal loopback fixture.
+        origin = routing["backendOrigin"]
+        if (routing["accountRoutingOverride"] != "NO_CONSTRAINT"
+                or origin != "https://chatgpt.com" and (
+                    self.probe_origin is None or origin != self.probe_origin.replace("http:", "https:", 1))):
+            raise Failure("unsupported_workspace")
+        return True
+
+    async def call(self, method, params=None, *, timeout=RPC_TIMEOUT, _workspace_check=False):
+        if self.failed:
+            raise ProtocolError(self.failure or "runtime_error")
+        if len(self.pending) >= 4:
             raise ProtocolError()
         self.sequence += 1
         identity = self.sequence
         future = asyncio.get_running_loop().create_future()
         self.pending[identity] = future
+        if _workspace_check:
+            self.workspace_request = identity
         try:
             async with asyncio.timeout(timeout):
                 await self.send({"id": identity, "method": method, "params": params or {}})
                 return await future
         except TimeoutError:
-            self.abort()
-            raise ProtocolError() from None
+            self.abort(ProtocolError("unsupported_workspace" if _workspace_check else "timeout"))
+            raise ProtocolError(self.failure) from None
         finally:
+            if self.workspace_request == identity:
+                self.workspace_request = None
             self.pending.pop(identity, None)
             if not future.done():
                 future.cancel()
             elif not future.cancelled():
                 future.exception()
 
-    def abort(self):
+    def abort(self, error=None):
+        if self.failure is None:
+            upstream = getattr(self.relay.current, "failure", None)
+            self.failure = (upstream if isinstance(upstream, str) and upstream in ERRORS
+                            else error.code if isinstance(error, Failure) else "runtime_error")
         self.failed = True
         self.relay.disarm()
         if self.process and self.process.returncode is None:
-            with contextlib.suppress(ProcessLookupError):
+            # close() still has to reap before releasing the reservation. A kill
+            # error must not prevent pending callers receiving the original cause.
+            with contextlib.suppress(OSError):
                 os.killpg(self.process.pid, signal.SIGKILL)
         for future in self.pending.values():
             if not future.done():
-                future.set_exception(ProtocolError())
+                future.set_exception(ProtocolError(self.failure))
 
     async def read_loop(self):
         try:
@@ -163,7 +209,7 @@ class Runtime:
                 line = await self.process.stdout.readline()
                 if not line or len(line) > WIRE_LIMIT or not line.endswith(b"\n"):
                     self.failure_reason = "invalid_frame_or_eof"
-                    raise ProtocolError()
+                    raise ProtocolError("protocol_mismatch" if line else "runtime_error")
                 message = json.loads(line)
                 if not isinstance(message, dict):
                     raise ProtocolError()
@@ -176,8 +222,9 @@ class Runtime:
                             raise ProtocolError()
                         # Deny every server request, including future approval types.
                         self.failure_reason = "server_request_denied"
+                        self.failure = self.failure or "tool_rejected"
                         await self.send({"id": message["id"], "error": {"code": -32601, "message": "Not permitted"}})
-                        raise ProtocolError()
+                        raise ProtocolError("tool_rejected")
                     self.event_count += 1
                     if self.event_count > 32768:
                         raise ProtocolError()
@@ -188,14 +235,30 @@ class Runtime:
                         self.failure_reason = "unknown_response_id"
                         raise ProtocolError()
                     future = self.pending[identity]
-                    if future.done() or "error" in message or "result" not in message:
+                    if future.done() or ("error" in message) == ("result" in message):
                         self.failure_reason = "invalid_rpc_response"
                         raise ProtocolError()
+                    if "error" in message:
+                        error = message["error"]
+                        if (not isinstance(error, dict) or type(error.get("code")) is not int
+                                or not isinstance(error.get("message"), str)):
+                            self.failure_reason = "invalid_rpc_response"
+                            raise ProtocolError()
+                        if identity == self.workspace_request:
+                            # Native discovery errors contain private routing text.
+                            # Let the relay fail this claimed send with a fixed label.
+                            future.set_exception(Failure("unsupported_workspace"))
+                            continue
+                        self.failure_reason = "native_rpc_error"
+                        # JSON-RPC codes describe the request contract, not account
+                        # authorization. Do not inspect provider text or error.data.
+                        raise ProtocolError("protocol_mismatch" if error["code"] in {-32600, -32601, -32602}
+                                            else "runtime_error")
                     future.set_result(message["result"])
         except asyncio.CancelledError:
             raise
-        except Exception:
-            self.abort()
+        except Exception as error:
+            self.abort(error if isinstance(error, Failure) else ProtocolError())
             if not self.closing:
                 with contextlib.suppress(Exception):
                     self.on_event("bridge/failed", {})

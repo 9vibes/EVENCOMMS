@@ -8,16 +8,21 @@ it**. Wearer assistance remains local and human-approved. The separate optional
 RESEARCH tab can send an operator's questions and selected still frames to OpenAI;
 it never automatically replies to the glasses.
 
-Version `0.4.1` is a device-login hotfix for the **experimental ChatGPT account
+Version `0.4.2` is a reply-compatibility and diagnostics hotfix for the **experimental ChatGPT account
 connection through Codex** introduced in `0.4.0` for operator-only Research.
-It fixes the disabled login button on the default HTTP Umbrel console, preserves
-OpenAI-issued codes including nine-digit codes, and fixes startup-proof and
-overlapping-heartbeat login failures. See the [hotfix notes](docs/codex.md#041-hotfix).
+It preserves the pinned CLI's native Responses Lite protocol, accepts validated
+reply metadata and streaming deltas, and reports fixed diagnostics such as
+`[codex:rate_limit]` without exposing provider bodies or credentials. Tools,
+approvals, model changes and unsupported workspace routing remain blocked.
+The `0.4.1` HTTP device-login, issued-code, startup-proof and heartbeat fixes are
+retained. See the [0.4.2 hotfix notes](docs/codex.md#042-hotfix) and
+[historical 0.4.1 notes](docs/codex.md#041-hotfix). Synthetic reproduction does not
+establish the cause of a past failure on a user's host or verify a real account.
 Consult the [release page](https://github.com/9vibes/EVENCOMMS/releases) and
 [CI runs](https://github.com/9vibes/EVENCOMMS/actions) for actual artifacts and
-verification results. The `0.4.1` publication targets share the existing public package:
-`ghcr.io/9vibes/evencomms:0.4.1` for the app and
-`ghcr.io/9vibes/evencomms:0.4.1-codex` for the isolated bridge.
+verification results. The `0.4.2` publication targets share the existing public package:
+`ghcr.io/9vibes/evencomms:0.4.2` for the app and
+`ghcr.io/9vibes/evencomms:0.4.2-codex` for the isolated bridge.
 The installable Umbrel package is maintained
 in [KNS-Umbrel](https://github.com/9vibes/KNS-Umbrel/tree/master/kunas-evencomms).
 The files in `deploy/umbrel` remain local-development templates, not the store's
@@ -169,9 +174,9 @@ curl --fail http://127.0.0.1:28097/health
    simulation**. This does not promise browser microphone capture or validate
    real glasses audio.
 
-The locally built tag is `evencomms:0.4.1`; no registry pull is needed or claimed.
+The locally built tag is `evencomms:0.4.2`; no registry pull is needed or claimed.
 This default stack does not install/start Codex. The optional standalone
-`compose.codex.yml` overlay builds `evencomms-codex:0.4.1` and uses a manually
+`compose.codex.yml` overlay builds `evencomms-codex:0.4.2` and uses a manually
 generated private `.env` service token, unlike Umbrel's automatic provisioning.
 Follow [the Codex deployment guide](docs/codex.md#standalone-opt-in) to opt in.
 The API binds port `8000` inside the private network and is **never published**.
@@ -453,13 +458,15 @@ end-to-end tests, Even packaging, Compose configuration and image smoke tests.
 Codex checks use the pinned real binary with synthetic loopback OAuth/inference,
 not a live account. Its authenticated private `GET /ready` must pass the actual
 generation gate with zero idle account sessions; `/health` alone is insufficient.
-The `0.4.1` release must pass CI, CPU transcription with synthetic speech,
+The `0.4.2` release must pass CI, CPU transcription with synthetic speech,
 persistence/upgrade checks and isolated bridge checks before publishing the
 exact tested amd64 images. The canonical store update follows verified anonymous
-pulls of both digests. Upgrade gates include the pinned `0.4.0` app and preservation
-of its initializer-created private service token. The Codex CI job also runs the
-offline native production-Session login test; the ordinary backend suite skips
-that test when the pinned binary is not on `PATH`.
+pulls of both digests. Upgrade gates retain all prior checks and include pinned
+`0.4.0` and `0.4.1` apps with preservation of their initializer-created private
+service tokens. Never retag a prior release. The Codex CI job also runs the offline
+native production-Session login test and all 15 full native-chat pipeline cases.
+The ordinary backend suite skips those 16 cases when the pinned binary is not on
+`PATH`; the dedicated job installs it and explicitly sets `PATH` so they run.
 See [release checks](scripts/README.md) and the linked CI/release results. Before
 deployment, verify a real utterance, model cache reuse, pairing/reconnect, gesture ordering, deletion,
 TLS/CORS/network permissions, and an operator-approved AI reply on target

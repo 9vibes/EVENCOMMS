@@ -21,9 +21,10 @@ from PIL import Image
 import httpx
 import pytest
 
+from codex_bridge.errors import ERROR_HEADER
 from codex_bridge.generation import Generation
 from codex_bridge.policy import (
-    AUTH_RECOVERY_PHASES, MODEL_PROOF_FIELDS, MODELS, PROVIDER, REQUIRED_PROOFS, VERSION,
+    AUTH_RECOVERY_PHASES, INSTRUCTIONS, MODEL_PROOF_FIELDS, MODELS, PROVIDER, REQUIRED_PROOFS, VERSION,
     configuration, generation_allowed, history_items, thread_params, turn_params,
 )
 from codex_bridge.probe import verify_binary
@@ -180,7 +181,8 @@ class MockRuntime:
             if self.mode == "overflow":
                 self.event("item/agentMessage/delta", {**shared, "delta": "x" * 16001})
             if self.mode == "error":
-                self.event("error", {**shared, "error": {"message": "secret-provider-error"}})
+                self.event("error", {**shared, "willRetry": False,
+                                     "error": {"message": "secret-provider-error", "codexErrorInfo": "other"}})
             self.event("item/completed", {**shared, "item": {"type": "agentMessage", "id": "answer", "text": "Answer", "phase": "final_answer"}})
             self.event("rawResponse/completed", shared)
             self.event("turn/completed", {"threadId": self.thread, "turn": {"id": self.turn, "status": "completed", "error": None}})
@@ -1100,6 +1102,8 @@ def test_unsafe_events_destroy_session_without_fallback(bridge_client, mode):
     runtime.mode = mode
     response = client.post(BASE + "/chat", json=chat())
     assert response.status_code == 502
+    assert response.headers[ERROR_HEADER] == {"tool": "tool_rejected", "overflow": "protocol_mismatch",
+                                              "error": "runtime_error"}[mode]
     assert "secret" not in response.text
     assert "does not automatically resubmit" in response.text
     assert "Codex may retry during bounded OAuth credential recovery" in response.text
@@ -1116,7 +1120,9 @@ def test_runtime_cannot_switch_provider_or_model(bridge_client, mode):
     client = bridge_client
     runtime = connect(client)
     runtime.mode = mode
-    assert client.post(BASE + "/chat", json=chat()).status_code == 502
+    response = client.post(BASE + "/chat", json=chat())
+    assert response.status_code == (422 if mode == "model_fallback" else 502)
+    assert response.headers[ERROR_HEADER] == ("model_changed" if mode == "model_fallback" else "protocol_mismatch")
     assert runtime.closed
     assert not any(method == "turn/start" for method, _ in runtime.calls)
 
@@ -1254,6 +1260,8 @@ def test_runtime_configuration_and_environment_have_no_inheritance(monkeypatch, 
     assert config["model_providers.evencomms.request_max_retries"] == 0
     assert config["model_providers.evencomms.stream_max_retries"] == 0
     assert config["model_providers.evencomms.base_url"] == "http://127.0.0.1:1/unarmed"
+    assert config["model_providers.evencomms.name"] == "OpenAI"
+    assert config["model_providers.evencomms.http_headers.version"] == "0.157.1"
     assert UPSTREAM == "https://chatgpt.com/backend-api/codex/responses"
     assert "https://chatgpt.com/backend-api/codex" not in config.values()
     assert not any(key.endswith(("env_key", "experimental_bearer_token")) for key in config)
@@ -1284,6 +1292,7 @@ def test_lighter_selector_retains_pinned_metadata_and_is_startup_default():
         assert row["truncation_policy"] == {"mode": "tokens", "limit": 10000}
         assert row["visibility"] == "list" and row["supported_in_api"] is True
         assert row["support_verbosity"] is True and row["default_verbosity"] == "low"
+        assert row["use_responses_lite"] is True and row["default_reasoning_summary"] == "none"
         assert row["availability_nux"] is None and row["upgrade"] is None
         assert "model_messages" not in row
 
@@ -1470,9 +1479,17 @@ def test_real_full_pipe_is_killed_reaped_and_drained(monkeypatch, tmp_path):
 
 
 def inference_payload(model=None):
-    return {"model": model or MODELS[0]["id"], "tools": [], "stream": True, "store": False,
-            "tool_choice": "auto", "input": [{"type": "message", "role": "user",
-                                              "content": [{"type": "input_text", "text": "Question"}]}]}
+    return {"model": model or MODELS[0]["id"], "stream": True, "store": False,
+            "tool_choice": "auto", "parallel_tool_calls": False,
+            "reasoning": {"effort": "low" if model == MODELS[1]["id"] else "medium", "context": "all_turns"},
+            "include": ["reasoning.encrypted_content"], "text": {"verbosity": "low"},
+            "client_metadata": {}, "prompt_cache_key": "thread-one", "input": [
+                {"type": "additional_tools", "id": "at_fixture", "role": "developer", "tools": []},
+                {"type": "message", "id": "msg_base", "role": "developer",
+                 "content": [{"type": "input_text", "text": INSTRUCTIONS}],
+                 "internal_chat_message_metadata_passthrough": {"content_item_kinds": ["model.base_instructions"]}},
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Question"}]},
+            ]}
 
 
 class RelayStream(httpx.AsyncByteStream):
@@ -1488,6 +1505,11 @@ class RelayStream(httpx.AsyncByteStream):
         self.closed = True
 
 
+async def allow_fixture_workspace(account_id):
+    assert account_id == "fixture-account"
+    return True
+
+
 async def relay_request(relay, budget=None, *, payload=None, headers=None, target=None, raw=None, encoded=None):
     if raw is None:
         body = encoded if encoded is not None else json.dumps(inference_payload() if payload is None else payload).encode()
@@ -1497,10 +1519,12 @@ async def relay_request(relay, budget=None, *, payload=None, headers=None, targe
             "chatgpt-account-id": "fixture-account", "user-agent": "evencomms_codex_bridge/0.157.1",
             "originator": "evencomms_codex_bridge", "thread-id": budget.thread_id if budget else "thread-one",
             "x-client-request-id": budget.thread_id if budget else "thread-one",
+            "version": "0.157.1", "x-openai-internal-codex-responses-lite": "true",
         }
         fields.update(headers or {})
         target = target or (budget.path if budget else "/unarmed/responses")
-        raw = (f"POST {target} HTTP/1.1\r\n" + "".join(f"{key}: {value}\r\n" for key, value in fields.items()) + "\r\n").encode() + body
+        raw = (f"POST {target} HTTP/1.1\r\n" + "".join(f"{key}: {value}\r\n" for key, value in fields.items()
+                                                        if value is not None) + "\r\n").encode() + body
     reader, writer = await asyncio.open_connection("127.0.0.1", int(relay.authority.split(":")[1]))
     try:
         writer.write(raw)
@@ -1516,7 +1540,11 @@ async def relay_request(relay, budget=None, *, payload=None, headers=None, targe
 
 def test_relay_has_no_budget_until_trusted_arm_and_never_uses_host_routing(monkeypatch):
     async def run():
-        calls = []
+        calls, checks = [], []
+
+        async def check_workspace(account_id):
+            checks.append(account_id)
+            return await allow_fixture_workspace(account_id)
 
         def upstream(request):
             calls.append(request)
@@ -1524,7 +1552,7 @@ def test_relay_has_no_budget_until_trusted_arm_and_never_uses_host_routing(monke
 
         monkeypatch.setenv("HTTPS_PROXY", "http://unrelated.invalid")
         monkeypatch.setenv("OPENAI_API_KEY", "unrelated-key")
-        relay = Relay(transport=httpx.MockTransport(upstream))
+        relay = Relay(check_workspace=check_workspace, transport=httpx.MockTransport(upstream))
         await relay.start()
         try:
             assert (await relay_request(relay))[0] == 403
@@ -1533,14 +1561,18 @@ def test_relay_has_no_budget_until_trusted_arm_and_never_uses_host_routing(monke
             relay.bind(budget, "thread-one")
             assert (await relay_request(relay, budget, target="https://evil.invalid/responses"))[0] == 403
             assert (await relay_request(relay, budget, headers={"host": "evil.invalid"}))[0] == 400
-            assert not calls and budget.attempts == 0
+            assert not calls and not checks and budget.attempts == 0
+            assert budget.failure is None and budget.upstream_status is None
             status, _, content = await relay_request(relay, budget)
             assert status == 200 and content == b"data: {}\n\n"
+            assert checks == ["fixture-account"]
             assert str(calls[0].url) == UPSTREAM
             assert calls[0].headers["host"] == "chatgpt.com"
             assert calls[0].headers["authorization"] == "Bearer fixture-private-access"
             assert calls[0].headers["user-agent"] == "evencomms_codex_bridge/0.157.1"
             assert calls[0].headers["accept-encoding"] == "identity"
+            assert calls[0].headers["version"] == "0.157.1"
+            assert calls[0].headers["x-openai-internal-codex-responses-lite"] == "true"
             assert "cookie" not in calls[0].headers
         finally:
             await relay.close()
@@ -1558,7 +1590,8 @@ def test_relay_has_no_budget_until_trusted_arm_and_never_uses_host_routing(monke
 def test_relay_rejects_unsafe_headers_without_forwarding(headers):
     async def run():
         calls = []
-        relay = Relay(transport=httpx.MockTransport(lambda request: calls.append(request) or httpx.Response(500)))
+        relay = Relay(check_workspace=allow_fixture_workspace,
+                      transport=httpx.MockTransport(lambda request: calls.append(request) or httpx.Response(500)))
         await relay.start()
         try:
             budget = relay.arm(MODELS[0]["id"])
@@ -1574,13 +1607,14 @@ def test_relay_rejects_unsafe_headers_without_forwarding(headers):
 @pytest.mark.parametrize("change", [
     {"tools": [{"type": "function", "name": "exec_command"}]}, {"tools": None}, {"model": MODELS[1]["id"]},
     {"model": "unlisted"}, {"background": True}, {"store": True}, {"stream": False},
-    {"previous_response_id": "hidden-old-context"}, {"tool_choice": "required"},
+    {"previous_response_id": "hidden-old-context"}, {"tool_choice": "required"}, {"tool_choice": "none"},
     {"input": [{"type": "function_call", "name": "exec_command"}]},
 ])
 def test_relay_revalidates_model_tools_and_body_and_consumes_invalid_send(change):
     async def run():
         calls = []
-        relay = Relay(transport=httpx.MockTransport(lambda request: calls.append(request) or httpx.Response(500)))
+        relay = Relay(check_workspace=allow_fixture_workspace,
+                      transport=httpx.MockTransport(lambda request: calls.append(request) or httpx.Response(500)))
         await relay.start()
         try:
             budget = relay.arm(MODELS[0]["id"])
@@ -1604,7 +1638,8 @@ def test_relay_revalidates_model_tools_and_body_and_consumes_invalid_send(change
 def test_relay_rejects_malformed_or_oversized_framing(malformed):
     async def run():
         calls = []
-        relay = Relay(transport=httpx.MockTransport(lambda request: calls.append(request) or httpx.Response(500)))
+        relay = Relay(check_workspace=allow_fixture_workspace,
+                      transport=httpx.MockTransport(lambda request: calls.append(request) or httpx.Response(500)))
         await relay.start()
         try:
             budget = relay.arm(MODELS[0]["id"])
@@ -1628,7 +1663,7 @@ def test_relay_forwards_only_bounded_401_recovery_and_one_non_401(statuses):
             calls.append(request)
             return httpx.Response(status, headers={"content-type": "text/event-stream"}, stream=RelayStream())
 
-        relay = Relay(transport=httpx.MockTransport(upstream))
+        relay = Relay(check_workspace=allow_fixture_workspace, transport=httpx.MockTransport(upstream))
         await relay.start()
         try:
             budget = relay.arm(MODELS[0]["id"])
@@ -1651,10 +1686,13 @@ def test_relay_forwards_only_bounded_401_recovery_and_one_non_401(statuses):
 
 def test_relay_rejects_changed_recovery_input_and_account():
     async def run():
+        changed = inference_payload()
+        changed["input"][-1]["content"][0]["text"] = "Different authorized input"
         for headers, payload in [({"chatgpt-account-id": "another-account"}, inference_payload()),
-                                 ({}, {**inference_payload(), "instructions": "different request"})]:
+                                 ({}, changed)]:
             calls = []
-            relay = Relay(transport=httpx.MockTransport(lambda request: calls.append(request) or httpx.Response(401)))
+            relay = Relay(check_workspace=allow_fixture_workspace,
+                          transport=httpx.MockTransport(lambda request: calls.append(request) or httpx.Response(401)))
             await relay.start()
             try:
                 budget = relay.arm(MODELS[0]["id"])
@@ -1671,7 +1709,11 @@ def test_relay_rejects_changed_recovery_input_and_account():
 def test_relay_overlap_stale_paths_and_completion_cannot_rearm_old_work():
     async def run():
         entered, release = asyncio.Event(), asyncio.Event()
-        calls = []
+        calls, checks = [], []
+
+        async def check_workspace(account_id):
+            checks.append(account_id)
+            return await allow_fixture_workspace(account_id)
 
         async def upstream(request):
             calls.append(request)
@@ -1679,7 +1721,7 @@ def test_relay_overlap_stale_paths_and_completion_cannot_rearm_old_work():
             await release.wait()
             return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=RelayStream())
 
-        relay = Relay(transport=httpx.MockTransport(upstream))
+        relay = Relay(check_workspace=check_workspace, transport=httpx.MockTransport(upstream))
         await relay.start()
         try:
             old = relay.arm(MODELS[0]["id"])
@@ -1687,7 +1729,8 @@ def test_relay_overlap_stale_paths_and_completion_cannot_rearm_old_work():
             pending = asyncio.create_task(relay_request(relay, old))
             await entered.wait()
             assert old.busy and (await relay_request(relay, old))[0] == 409
-            assert len(calls) == 1
+            assert old.failure is None
+            assert len(calls) == len(checks) == 1
             release.set()
             assert (await pending)[0] == 200
             await relay.finish(old)
@@ -1696,8 +1739,10 @@ def test_relay_overlap_stale_paths_and_completion_cannot_rearm_old_work():
             for _ in range(3):
                 assert (await relay_request(relay, old))[0] == 403
             assert new.attempts == 0 and not new.consumed
+            assert new.failure is None and new.upstream_status is None
+            assert len(checks) == 1
             assert (await relay_request(relay, new))[0] == 200
-            assert new.attempts == 1 and old.attempts == 1 and len(calls) == 2
+            assert new.attempts == 1 and old.attempts == 1 and len(calls) == len(checks) == 2
         finally:
             await relay.close()
 
@@ -1719,7 +1764,7 @@ def test_relay_uncertainty_redirect_and_invalid_upstream_consume_budget(failure,
                 return httpx.Response(200, headers={"content-encoding": "gzip"}, stream=RelayStream((b"private",)))
             return httpx.Response(200, headers={"content-type": "text/html"}, content=b"private")
 
-        relay = Relay(transport=httpx.MockTransport(upstream))
+        relay = Relay(check_workspace=allow_fixture_workspace, transport=httpx.MockTransport(upstream))
         await relay.start()
         try:
             budget = relay.arm(MODELS[0]["id"])
@@ -1728,6 +1773,8 @@ def test_relay_uncertainty_redirect_and_invalid_upstream_consume_budget(failure,
             assert status == 502 and b"private" not in content
             assert (await relay_request(relay, budget))[0] == 409
             assert budget.consumed and len(calls) == 1
+            assert budget.failure == {"network": "network_error", "redirect": "unsupported_workspace",
+                                      "compressed": "response_encoding", "bad_content_type": "protocol_mismatch"}[failure]
             assert "private provider diagnostic" not in caplog.text
         finally:
             await relay.close()
@@ -1743,7 +1790,7 @@ def test_relay_discards_response_cookies_and_private_error_bodies():
             calls.append(request)
             return httpx.Response(401, headers={"set-cookie": "private=value; Path=/"}, content=b"private account diagnostic")
 
-        relay = Relay(transport=httpx.MockTransport(upstream))
+        relay = Relay(check_workspace=allow_fixture_workspace, transport=httpx.MockTransport(upstream))
         await relay.start()
         try:
             budget = relay.arm(MODELS[0]["id"])
@@ -1767,7 +1814,7 @@ def test_relay_deadline_and_close_cancel_owned_forwarding():
             entered.set()
             await asyncio.Event().wait()
 
-        relay = Relay(transport=httpx.MockTransport(upstream))
+        relay = Relay(check_workspace=allow_fixture_workspace, transport=httpx.MockTransport(upstream))
         await relay.start()
         expired = relay.arm(MODELS[0]["id"])
         relay.bind(expired, "expired-thread")
@@ -1793,7 +1840,8 @@ def test_relay_deadline_and_close_cancel_owned_forwarding():
 def test_relay_rejects_invalid_and_ambiguous_json(encoded):
     async def run():
         calls = []
-        relay = Relay(transport=httpx.MockTransport(lambda request: calls.append(request) or httpx.Response(500)))
+        relay = Relay(check_workspace=allow_fixture_workspace,
+                      transport=httpx.MockTransport(lambda request: calls.append(request) or httpx.Response(500)))
         await relay.start()
         try:
             budget = relay.arm(MODELS[0]["id"])
@@ -1816,7 +1864,7 @@ def test_relay_bounds_streamed_bytes_and_keeps_spent_budget(monkeypatch):
             return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=chunks)
 
         monkeypatch.setattr("codex_bridge.relay.RESPONSE_LIMIT", 32)
-        relay = Relay(transport=httpx.MockTransport(upstream))
+        relay = Relay(check_workspace=allow_fixture_workspace, transport=httpx.MockTransport(upstream))
         await relay.start()
         try:
             budget = relay.arm(MODELS[0]["id"])
@@ -1839,7 +1887,7 @@ def test_relay_stream_timeout_closes_stream_without_replay():
                 await asyncio.Event().wait()
 
         stream = SlowStream()
-        relay = Relay(transport=httpx.MockTransport(lambda request: httpx.Response(
+        relay = Relay(check_workspace=allow_fixture_workspace, transport=httpx.MockTransport(lambda request: httpx.Response(
             200, headers={"content-type": "text/event-stream"}, stream=stream)))
         await relay.start()
         try:
@@ -1849,6 +1897,7 @@ def test_relay_stream_timeout_closes_stream_without_replay():
             status, _, body = await relay_request(relay, budget)
             assert status == 200 and body == b"data: first\n\n" and stream.closed
             assert budget.consumed and budget.attempts == 1
+            assert budget.failure == "timeout"
             assert (await relay_request(relay, budget))[0] == 409
         finally:
             await relay.close()
@@ -1867,7 +1916,8 @@ def test_relay_cookie_headers_do_not_enter_debug_logs(caplog):
             await writer.wait_closed()
 
         server = await asyncio.start_server(upstream, "127.0.0.1", 0)
-        relay = Relay(probe_origin="http://127.0.0.1:" + str(server.sockets[0].getsockname()[1]))
+        relay = Relay(check_workspace=allow_fixture_workspace,
+                      probe_origin="http://127.0.0.1:" + str(server.sockets[0].getsockname()[1]))
         await relay.start()
         try:
             budget = relay.arm(MODELS[0]["id"])
@@ -1886,7 +1936,7 @@ def test_relay_cookie_headers_do_not_enter_debug_logs(caplog):
 
 def test_relay_caps_connections_before_creating_handler_tasks():
     async def run():
-        relay = Relay(transport=httpx.MockTransport(lambda request: httpx.Response(500)))
+        relay = Relay(check_workspace=allow_fixture_workspace, transport=httpx.MockTransport(lambda request: httpx.Response(500)))
         await relay.start()
         writers = []
         try:

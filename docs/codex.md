@@ -1,8 +1,9 @@
-# Experimental Codex Research (0.4.1)
+# Experimental Codex Research (0.4.2)
 
 EVENCOMMS `0.4.0` introduced **ChatGPT account (Experimental Codex)** alongside the
-existing **OpenAI API key** connection in Research. Version `0.4.1` fixes device
-login; the feature remains **experimental**. Check the
+existing **OpenAI API key** connection in Research. Version `0.4.2` fixes reply
+compatibility and adds safe diagnostics while retaining the `0.4.1` device-login
+fixes; the feature remains **experimental**. Check the
 [release page](https://github.com/9vibes/EVENCOMMS/releases) and canonical
 [KNS-Umbrel package](https://github.com/9vibes/KNS-Umbrel/tree/master/kunas-evencomms)
 for actual CI results, published digests and installation instructions. Source
@@ -23,6 +24,41 @@ uses the official pinned `0.157.1` runtime over private stdio, with EVENCOMMS's 
 client identity. You sign in on OpenAI's site using a device code; EVENCOMMS never
 asks you to paste an account password, browser cookie or OAuth token. It is not
 a general-purpose ChatGPT web API, a cookie scraper or unlimited API access.
+
+## 0.4.2 Hotfix
+
+- Restores the pinned CLI's native Responses Lite settings:
+  `use_responses_lite: true` and `default_reasoning_summary: "none"`. The prior
+  sanitized catalog omitted these fields and unintentionally changed the native
+  wire protocol. The upstream `version` header truthfully remains `0.157.1`, not
+  the application's `0.4.2` client metadata version; the official binary is unchanged.
+- Accepts known, bounded metadata scoped to the active thread/turn and validated
+  reasoning/text streaming deltas. Informational metadata and reasoning are not
+  returned as the answer. Tools, approvals, unknown events and actual model changes
+  still fail closed; there is no automatic model/provider/API fallback.
+- Preserves fixed failure classifications such as `[codex:rate_limit]`,
+  `[codex:model_unavailable]` and `[codex:unsupported_workspace]`. Diagnostics use
+  allowlisted codes and fixed messages, never raw provider bodies, native logs,
+  account details or secrets. See [Reply Failures](#reply-failures).
+- Requires native `account/read` workspace discovery before **every** upstream
+  inference attempt, including credential-recovery attempts after OAuth refresh.
+  Missing, ambiguous or unsupported regional routing is rejected even if the
+  loopback provider suppresses routing headers. The relay never selects an
+  arbitrary backend to bypass a workspace restriction.
+- Removes the hidden 15-second relay read cutoff while retaining the same
+  85-second end-to-end generation budget. Startup still verifies the binary
+  independently within 10 seconds, then bounds its generation proof at 75 seconds.
+
+A synthetic reproduction showed valid reply events rejected by the old
+`Generation` handler succeeding with the corrected handler. That establishes a
+reproducible compatibility defect, not the exact cause of a historical generic
+failure on a user's host. No real OpenAI account was used or verified.
+
+The 0.4.1 trusted-network HTTP device-login confirmation and API-key HTTPS/loopback
+guard are unchanged. So are data/settings, mounts, networks, two-operator and
+eight-send limits, and container RAM/resource limits. Update both images in place;
+do not replace or retag either prior release. Official Codex `0.157.1`, its locked
+dependencies and binary hashes remain unchanged.
 
 ## 0.4.1 Hotfix
 
@@ -131,7 +167,7 @@ docker compose -f compose.yml -f compose.codex.yml config --quiet
 docker compose -f compose.yml -f compose.codex.yml up -d --build --wait --wait-timeout 150
 ```
 
-The local source tags are `evencomms:0.4.1` and `evencomms-codex:0.4.1`, not registry
+The local source tags are `evencomms:0.4.2` and `evencomms-codex:0.4.2`, not registry
 references. The optional override supplies `CODEX_BRIDGE_URL=http://codex-bridge:8001`
 only to the application server and shares the bridge token with those two services.
 The backend requires a URL and one token source together, and validates an
@@ -222,6 +258,44 @@ the backend's `OPENAI_TIMEOUT` setting also applies. `OPENAI_MAX_OUTPUT_TOKENS`
 applies only to API mode, not Codex. Codex output is limited to 16,000 characters;
 an oversized/unsafe result fails rather than silently triggering another turn.
 
+## Reply Failures
+
+An unconfirmed reply does not prove that OpenAI received or rejected a generation:
+the backend checks bridge status and models before sending it. Do not repeatedly
+retry while diagnosing a failure; an already accepted request may consume allowance.
+
+Recognized bridge failures include a fixed `[codex:code]` marker instead of discarding the cause
+behind only `Codex bridge request failed`. No provider error body, account details,
+credentials or native logs are included. Older releases' generic message cannot
+reveal which of these causes occurred retrospectively.
+
+| Code | Meaning / Next Step |
+| --- | --- |
+| `rate_limit` | Check ChatGPT usage limits and wait for allowance/rate limits to reset. |
+| `model_unavailable` | The account cannot use the selected model; check its model entitlement. |
+| `request_rejected`, `context_limit` | Model/input compatibility or conversation limits were rejected. |
+| `account_auth` | Disconnect and sign in again; this does not log out the EVENCOMMS operator. |
+| `account_permission`, `policy_rejected` | OpenAI denied the request. Its controls are not bypassed. |
+| `unsupported_workspace` | The account requires routing this fixed-origin bridge does not support. |
+| `model_changed` | An actual upstream model change was rejected; no fallback was attempted. |
+| `bridge_auth` | The private services could not authenticate; recreate the matching app/bridge stack. Do not replace your ChatGPT credential. |
+| `bridge_http_error` | The bridge returned an unclassified status. Report the HTTP status and code, not raw logs or credentials. |
+| `bridge_unavailable`, `provider_unavailable`, `network_error`, `timeout` | A service, network or deadline failure. Check availability before another explicit Send. |
+| `generation_disabled` | The runtime safety proof did not pass. Never disable safeguards to work around it. |
+| `protocol_mismatch`, `response_encoding`, `stream_incomplete`, `runtime_error`, `tool_rejected` | Report the code, installed version and selected model. Do not include prompts, screenshots, account tokens or raw logs. |
+
+The bridge preserves the pinned CLI's Responses Lite and reasoning-summary
+settings. It accepts validated informational metadata without confusing it with
+a tool call, but still rejects tools, approvals, unknown events and model changes.
+Reasoning output and metadata are never returned as the assistant's answer.
+Before forwarding each inference attempt, native account discovery must confirm
+the same account and an unrestricted route to the bridge's fixed OpenAI origin.
+Unknown or regional workspace routing is rejected, including when it changes
+during sign-in recovery; it is not bypassed by the local relay.
+The relay's end-to-end generation budget remains 85 seconds; there is no separate
+15-second read cutoff. No change adds automatic application resubmission or paid
+API fallback.
+
 ## Privacy And Lifetime
 
 ChatGPT account/workspace data controls apply, **not the API `store:false`
@@ -273,6 +347,7 @@ loopback synthetic OAuth/provider fixture with no live OpenAI requests:
 npm ci --prefix codex_bridge --ignore-scripts --no-audit --no-fund
 python scripts/check_codex_runtime.py --binary codex_bridge/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex --temp-parent /tmp
 PATH="$PWD/codex_bridge/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin:$PATH" python -m pytest backend/tests/test_codex_bridge.py -k offline_pinned_binary_device_login_uses_production_session
+PATH="$PWD/codex_bridge/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin:$PATH" python -m pytest backend/tests/test_codex_native_chat.py
 ```
 
 Use a Python environment with the project test dependencies. The script prints
@@ -281,6 +356,17 @@ test uses the actual pinned native binary and a synthetic nine-digit device-code
 fixture, without an account request. It skips in the ordinary backend suite when
 the binary is missing from `PATH`; the dedicated Codex CI job installs the locked
 binary and puts it on `PATH` so this test runs, not skips.
+The native-chat suite additionally traverses real backend and bridge APIs,
+production Session/Generation, the pinned binary and the real relay. It checks
+both models, JPEG history, realistic metadata/reasoning/text events and safe
+quota/model/stream/tool failure classification using a local synthetic provider.
+Native-discovered regional routing and post-refresh routing changes are also
+checked without sending inference content to a disallowed destination.
+Without the pinned binary on `PATH`, the ordinary backend job skips all 15
+native-chat cases plus the one native login case, totaling 16 expected skips.
+The dedicated job runs the entire native-chat module as well as that login case.
+These tests do not establish live-account access or the cause of a historical
+generic failure on a user's host.
 CI/release verification must build and exercise the bridge under its container
 controls without an account,
 including authenticated `/ready` assertions on its binary and generation gates
@@ -290,8 +376,8 @@ See [the pinned protocol evidence](../codex_bridge/PROTOCOL.md) for exact recove
 sequences and [the script guide](../scripts/README.md#codex-runtime-probe).
 
 Planned publication uses **the same existing public package** for
-`ghcr.io/9vibes/evencomms:0.4.1` (app/init) and
-`ghcr.io/9vibes/evencomms:0.4.1-codex` (bridge). Promote the canonical Umbrel package
+`ghcr.io/9vibes/evencomms:0.4.2` (app/init) and
+`ghcr.io/9vibes/evencomms:0.4.2-codex` (bridge). Promote the canonical Umbrel package
 only after the exact tested images are published, both digests are anonymously
 pullable, and the actual release-run results are recorded. No digest or CI
 success is implied by these source tags. See [release checks](../scripts/README.md#publication).

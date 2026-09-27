@@ -13,20 +13,25 @@ import secrets
 
 import httpx
 
-from .policy import MODELS
+from .errors import Failure, provider_failure
+from .policy import INSTRUCTIONS, MODELS, VERSION
 
 
 UPSTREAM = "https://chatgpt.com/backend-api/codex/responses"
 HEADER_LIMIT = 32768
 BODY_LIMIT = 10 * 1024 * 1024
 RESPONSE_LIMIT = 16 * 1024 * 1024
+ERROR_BODY_LIMIT = 16384
 GENERATION_SECONDS = 85
 MAX_CONNECTIONS = 4
 FORWARD_HEADERS = frozenset({
     "authorization", "chatgpt-account-id", "user-agent", "originator", "accept", "content-type",
     "session-id", "thread-id", "x-client-request-id", "x-codex-beta-features", "x-codex-window-id",
     "x-codex-turn-metadata", "x-codex-routing-hint", "x-codex-turn-state", "x-codex-installation-id",
-    "x-openai-internal-codex-residency", "x-openai-account-routing-override",
+    "version", "x-openai-internal-codex-responses-lite",
+})
+ROUTING_HEADERS = frozenset({
+    "x-openai-fedramp", "x-openai-internal-codex-residency", "x-openai-account-routing-override",
 })
 RESPONSE_HEADERS = frozenset({"x-codex-turn-state", "x-request-id", "openai-model", "x-reasoning-included"})
 
@@ -45,9 +50,10 @@ class NoCookies(DefaultCookiePolicy):
 
 
 class Rejected(Exception):
-    def __init__(self, status=400):
+    def __init__(self, status=400, failure="protocol_mismatch"):
         super().__init__("Inference relay rejected request")
         self.status = status
+        self.failure = failure
 
 
 def decode_request(raw):
@@ -63,13 +69,68 @@ def decode_request(raw):
         raise ValueError()
 
     value = json.loads(raw, object_pairs_hook=object_pairs, parse_constant=invalid_constant)
-    if (not isinstance(value, dict) or value.get("tools") != [] or value.get("stream") is not True
-            or value.get("store") is not False or value.get("background", False) is not False
-            or value.get("previous_response_id") is not None or value.get("tool_choice") not in {"auto", "none"}):
+    # Only the pinned no-tool Lite request, not a general Responses proxy. Lite
+    # embeds instructions/tools in input; the empty top-level fields are omitted.
+    if (not isinstance(value, dict) or set(value) != {
+            "model", "input", "tool_choice", "parallel_tool_calls", "reasoning", "store", "stream",
+            "include", "prompt_cache_key", "text", "client_metadata",
+        } or value.get("stream") is not True or value.get("store") is not False
+            or value.get("tool_choice") != "auto" or value.get("parallel_tool_calls") is not False
+            or value.get("include") != ["reasoning.encrypted_content"]
+            or value.get("text") != {"verbosity": "low"}):
+        raise ValueError()
+    reasoning = value.get("reasoning")
+    if (not isinstance(reasoning, dict) or set(reasoning) != {"effort", "context"}
+            or reasoning.get("context") != "all_turns"
+            or reasoning.get("effort") not in ("low", "medium", "high", "xhigh", "max", "ultra")):
+        raise ValueError()
+    metadata = value.get("client_metadata")
+    if (not isinstance(value.get("prompt_cache_key"), str) or not 1 <= len(value["prompt_cache_key"]) <= 128
+            or not isinstance(metadata, dict)
+            or any(not isinstance(entry, str) for entry in metadata.values())):
         raise ValueError()
     items = value.get("input")
-    if (not isinstance(items, list) or not 1 <= len(items) <= 64
-            or any(not isinstance(item, dict) or item.get("type") != "message" for item in items)):
+    if (not isinstance(items, list) or not 3 <= len(items) <= 64 or not isinstance(items[0], dict)
+            or set(items[0]) != {"type", "id", "role", "tools"}
+            or items[0].get("type") != "additional_tools" or items[0].get("role") != "developer"
+            or items[0].get("tools") != [] or not isinstance(items[0].get("id"), str)
+            or not re.fullmatch(r"at_[A-Za-z0-9_-]{1,124}", items[0]["id"])):
+        raise ValueError()
+    for index, item in enumerate(items[1:], 1):
+        if (not isinstance(item, dict) or item.get("type") != "message"
+                or set(item) - {"type", "id", "role", "content", "phase", "internal_chat_message_metadata_passthrough"}
+                or item.get("role") not in ("developer", "user", "assistant")
+                or "id" in item and (not isinstance(item["id"], str) or not 1 <= len(item["id"]) <= 128)
+                or item.get("phase") not in (None, "commentary", "final_answer")
+                or not isinstance(item.get("content"), list) or not 1 <= len(item["content"]) <= 4):
+            raise ValueError()
+        metadata = item.get("internal_chat_message_metadata_passthrough", {})
+        if (not isinstance(metadata, dict) or set(metadata) - {"turn_id", "create_time", "content_item_kinds"}
+                or "turn_id" in metadata and not isinstance(metadata["turn_id"], str)
+                or "create_time" in metadata and type(metadata["create_time"]) not in (int, float)
+                or "content_item_kinds" in metadata and (
+                    not isinstance(metadata["content_item_kinds"], list)
+                    or any(not isinstance(kind, str) for kind in metadata["content_item_kinds"]))):
+            raise ValueError()
+        if index == 1:
+            if item.get("role") != "developer" or item["content"] != [{"type": "input_text", "text": INSTRUCTIONS}]:
+                raise ValueError()
+        elif item.get("role") == "developer":
+            if index != 2 or metadata.get("content_item_kinds") != ["host_skills.instructions"]:
+                raise ValueError()
+        for part in item["content"]:
+            if not isinstance(part, dict):
+                raise ValueError()
+            if part.get("type") == "input_image":
+                if (item["role"] != "user" or set(part) - {"type", "image_url", "detail"}
+                        or not isinstance(part.get("image_url"), str)
+                        or not part["image_url"].startswith("data:image/jpeg;base64,")
+                        or part.get("detail") not in (None, "auto", "low", "high", "original")):
+                    raise ValueError()
+            elif (set(part) != {"type", "text"} or not isinstance(part.get("text"), str)
+                    or part.get("type") != ("output_text" if item["role"] == "assistant" else "input_text")):
+                raise ValueError()
+    if items[-1].get("role") != "user":
         raise ValueError()
     # Recovered authentication must not change the authorized inference input.
     fingerprint = hashlib.sha256(json.dumps(
@@ -93,18 +154,21 @@ class Budget:
     non_401: int = 0
     blocked: int = 0
     completed: bool = False
+    failure: str | None = None
+    upstream_status: int | None = None
     fingerprint: bytes | None = None
     account: bytes | None = None
     tasks: set = field(default_factory=set)
 
 
 class Relay:
-    def __init__(self, *, probe_origin=None, transport=None):
+    def __init__(self, *, check_workspace=None, probe_origin=None, transport=None):
         # Internal fixture injection only. Never read an upstream/proxy URL from
         # environment, headers, request body, or the public bridge API.
         if probe_origin is not None and not re.fullmatch(r"http://127\.0\.0\.1:[0-9]{1,5}", probe_origin):
             raise ValueError("Probe origin must be loopback")
         self.upstream = UPSTREAM if probe_origin is None else probe_origin + "/responses"
+        self.check_workspace = check_workspace
         self.transport = transport
         self.server = None
         self.client = None
@@ -123,7 +187,7 @@ class Relay:
             transport=self.transport or httpx.AsyncHTTPTransport(
                 retries=0, http1=True, http2=False, trust_env=False,
                 limits=httpx.Limits(max_connections=1, max_keepalive_connections=1)),
-            timeout=httpx.Timeout(15, connect=5, pool=1, write=10), trust_env=False,
+            timeout=httpx.Timeout(GENERATION_SECONDS, connect=5, pool=1, write=10), trust_env=False,
             follow_redirects=False, cookies=CookieJar(policy=NoCookies()),
             headers={"Accept-Encoding": "identity"},
         )
@@ -211,7 +275,7 @@ class Relay:
                     value = value.strip(b" ").decode("ascii")
                     if (not re.fullmatch(r"[a-z0-9-]+", name) or name in headers
                             or any(not 32 <= ord(char) < 127 for char in value)
-                            or name not in FORWARD_HEADERS | {"host", "content-length", "accept-encoding"}):
+                            or name not in FORWARD_HEADERS | ROUTING_HEADERS | {"host", "content-length", "accept-encoding"}):
                         raise Rejected()
                     headers[name] = value
                 if headers.get("host") != self.authority or headers.get("accept-encoding", "identity") != "identity":
@@ -229,6 +293,11 @@ class Relay:
                 budget.consumed = True
                 budget.tasks.add(asyncio.current_task())
                 claimed = True
+                if budget.failure == "account_auth":
+                    budget.failure = None  # A confirmed 401 permits managed recovery, not a permanent failure.
+                if ("x-openai-fedramp" in headers or "x-openai-internal-codex-residency" in headers
+                        or headers.get("x-openai-account-routing-override") not in (None, "NO_CONSTRAINT")):
+                    raise Rejected(422, "unsupported_workspace")
                 length = headers.get("content-length", "")
                 if not length.isdecimal() or len(length) > 8 or not 0 < int(length) <= BODY_LIMIT:
                     raise Rejected(413)
@@ -237,9 +306,12 @@ class Relay:
                         or not re.fullmatch(r"[A-Za-z0-9_-]{1,256}", headers.get("chatgpt-account-id", ""))
                         or not budget.thread_id or headers.get("thread-id") != budget.thread_id
                         or headers.get("x-client-request-id") != budget.thread_id
+                        or headers.get("version") != VERSION
+                        or headers.get("x-openai-internal-codex-responses-lite") != "true"
                         or not headers.get("user-agent") or not headers.get("originator")):
                     raise Rejected()
-                raw = await reader.readexactly(int(length))
+                async with asyncio.timeout(max(0, budget.deadline - asyncio.get_running_loop().time())):
+                    raw = await reader.readexactly(int(length))
                 try:
                     model, fingerprint = decode_request(raw)
                 except (ValueError, TypeError, RecursionError):
@@ -250,6 +322,18 @@ class Relay:
                     raise Rejected()
                 budget.fingerprint, budget.account = fingerprint, account
             async with asyncio.timeout(max(0, budget.deadline - asyncio.get_running_loop().time())):
+                # Opaque relay URLs bypass native Responses routing. Resolve the
+                # account-owned policy on every attempt, including OAuth recovery.
+                if self.check_workspace is None:
+                    raise Failure("unsupported_workspace")
+                try:
+                    verified = await self.check_workspace(headers["chatgpt-account-id"])
+                except Failure:
+                    raise
+                except Exception:
+                    raise Failure("unsupported_workspace") from None
+                if verified is not True:
+                    raise Failure("unsupported_workspace")
                 forwarded = {key: value for key, value in headers.items() if key in FORWARD_HEADERS}
                 forwarded["accept-encoding"] = "identity"
                 # The pessimistic consumed reservation survives every exception,
@@ -257,20 +341,50 @@ class Relay:
                 budget.attempts += 1
                 self.forwarded_requests += 1
                 async with self.client.stream("POST", self.upstream, content=raw, headers=forwarded,
-                                              follow_redirects=False) as response:
+                                              follow_redirects=False, timeout=httpx.Timeout(
+                                                  max(0.001, budget.deadline - asyncio.get_running_loop().time()),
+                                                  connect=5, pool=1, write=10)) as response:
                     status = response.status_code
+                    budget.upstream_status = status
                     if status != 401:
                         budget.non_401 += 1
                         self.forwarded_non_401 += 1
-                    if (sum(len(k) + len(v) for k, v in response.headers.raw) > HEADER_LIMIT
-                            or response.headers.get("content-encoding", "identity") != "identity"):
-                        raise Rejected(502)
                     if status != 200:
+                        budget.failure = provider_failure(status)
+                        # Status wins even for encoded/unreadable errors. Inspect
+                        # only small identity JSON and allowlisted code/type labels.
+                        if (status in {400, 403, 404, 422}
+                                and sum(len(k) + len(v) for k, v in response.headers.raw) <= HEADER_LIMIT
+                                and response.headers.get("content-encoding", "identity") == "identity"
+                                and response.headers.get("content-type", "").split(";", 1)[0].strip().lower() == "application/json"):
+                            with contextlib.suppress(ValueError, TypeError, RecursionError, httpx.HTTPError, TimeoutError):
+                                async with asyncio.timeout(1):
+                                    body = bytearray()
+                                    async for chunk in response.aiter_bytes(chunk_size=ERROR_BODY_LIMIT + 1):
+                                        body.extend(chunk)
+                                        if len(body) > ERROR_BODY_LIMIT:
+                                            break
+                                    if len(body) <= ERROR_BODY_LIMIT:
+                                        document = json.loads(body)
+                                        error = document.get("error") if isinstance(document, dict) else None
+                                        if isinstance(error, dict):
+                                            code = next((error.get(key) for key in ("code", "type")
+                                                         if isinstance(error.get(key), str) and error[key] in {
+                                                             "model_not_found", "model_not_available", "unsupported_model",
+                                                             "context_length_exceeded", "context_window_exceeded",
+                                                              "content_policy_violation", "policy_violation",
+                                                              "cyber_policy", "bio_policy", "misalignment_policy_violation",
+                                                         }), None)
+                                            budget.failure = provider_failure(status, code)
                         await response.aclose()
                         await reply(status if 400 <= status <= 599 else 502)
                         if status == 401 and budget.attempts < 3 and budget.armed:
                             budget.consumed = False
                         return
+                    if sum(len(k) + len(v) for k, v in response.headers.raw) > HEADER_LIMIT:
+                        raise Rejected(502)
+                    if response.headers.get("content-encoding", "identity") != "identity":
+                        raise Rejected(502, "response_encoding")
                     if response.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "text/event-stream":
                         raise Rejected(502)
                     outgoing = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\nConnection: close\r\n"
@@ -301,9 +415,15 @@ class Relay:
                 budget.blocked += 1
             if claimed:
                 budget.consumed = True
+                if budget.failure is None:
+                    budget.failure = (error.failure if isinstance(error, Rejected) else
+                                      error.code if isinstance(error, Failure) else
+                                      "timeout" if isinstance(error, (TimeoutError, httpx.TimeoutException)) else
+                                      "network_error" if isinstance(error, (httpx.HTTPError, ConnectionError)) else
+                                      "protocol_mismatch")
             if not started:
                 with contextlib.suppress(Exception):
-                    await reply(error.status if isinstance(error, Rejected) else 502)
+                    await reply(error.status if isinstance(error, (Rejected, Failure)) else 502)
         finally:
             if claimed:
                 budget.busy = False

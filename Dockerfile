@@ -7,6 +7,7 @@ COPY frontend/ ./
 RUN npm run build
 
 FROM python:3.12-slim-bookworm AS runtime
+LABEL org.opencontainers.image.version="0.4.2"
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \

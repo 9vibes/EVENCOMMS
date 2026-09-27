@@ -62,9 +62,10 @@ runtime response that changes provider or model.
 All probe generation cases now use synthetic device login with
 `requires_openai_auth=true`. The probe checks `model/list` against the complete
 sanitized startup catalog, regardless of runtime priority ordering, and runs a
-successful one-shot for **each exposed selector**. It inspects every authenticated Responses
-request, including recovery attempts, for `tools: []`, exact role-labelled
-history, and exact image bytes. The history fixture contains 20 messages, six
+successful one-shot for **each exposed selector**. It inspects every authenticated
+Responses Lite request, including recovery attempts, for one empty
+`additional_tools` prefix, exact role-labelled history, and exact image bytes.
+The Lite and native-version headers are also checked. The history fixture contains 20 messages, six
 JPEGs, maximum-length message fields, and instruction-shaped user text. Catalog
 selectors do not establish subscription entitlement or actual availability.
 The probe replaces the OAuth issuer and the relay's upstream origin with
@@ -77,19 +78,31 @@ The exposed selectors, in bridge order, are `gpt-6-luna` and `gpt-6-astra`, both
 with text/image input in the same pinned upstream catalog. Upstream describes
 Luna as "Fast and affordable model for easier tasks." Its `medium` default
 reasoning level and priority `3` are preserved, as are Astra's `low` default and
-priority `1`. Only allowlisted metadata is retained; upstream prompt strings are
-not imported. Both entries have identical mandatory no-tool restrictions.
+priority `1`. The native `use_responses_lite: true` and
+`default_reasoning_summary: "none"` values are preserved as well; omitting them
+changes the SDK's wire format and reasoning parameters. Only allowlisted metadata
+is retained; upstream prompt strings are not imported. Both entries have identical
+mandatory no-tool restrictions.
 These descriptors are not a guarantee of account allowance or price.
 
 Luna is the bridge startup default and the recovery-fixture selector. Chat still
 requires an explicitly supplied model, and the UI's explicit selection behavior
-is unchanged. `model_proofs` must contain a successful tools/history/images
+is unchanged. `model_proofs` must contain successful tools/Lite-wire/headers/history/images
+and response-event checks
 one-shot for every exposed ID; missing or failed model coverage disables
 generation. The per-model smoke tests add only one extra sequential runtime to
 the existing recovery suite; the generation proof's 75-second timeout remains.
 The service independently verifies the binary off the event loop with a
 10-second deadline first. A generation-probe timeout cannot erase that binary
 verification or block device login; generation still needs the complete proof.
+
+The successful SSE fixture includes real protocol metadata notifications,
+reasoning deltas, output-text deltas and final completion. Known bounded
+`model/verification`, `turn/moderationMetadata` and
+`model/safetyBuffering/updated` events are checked against their current thread
+and turn, then discarded. They are informational, not authorization grants or
+permission to switch models. Provider refusals, policy errors and actual model
+reroutes are not bypassed. Unknown events, tools and approvals still fail closed.
 
 The gate also requires binary/schema verification, ephemeral credentials,
 unexpected tool-call rejection, HTTP-500 behavior, revocation handling, fixture
@@ -139,17 +152,26 @@ before any upstream forwarding, independently of notification timing.
   attempt is forwarded; HTTP 500, redirect, cancellation, timeout and network
   uncertainty consume the budget. Overlapping calls and follow-ups are rejected
   locally. Authentication recovery cannot change the model, input or account.
-- The relay validates `tools: []`, the selected catalog model, full message
-  input, streaming, and non-persistence. Origin/cookie/unknown/hop-by-hop request
+- The relay validates the pinned Responses Lite form: one initial
+  `additional_tools` item with an empty tool list, embedded research instructions,
+  the selected catalog model, message/image input, streaming and non-persistence.
+  Nonempty tools, tool outputs, injected reasoning history and protocol overrides
+  are rejected. Origin/cookie/unknown/hop-by-hop request
   headers, compressed or ambiguous framing, redirects, and arbitrary destinations
   are rejected. Request headers use an explicit pinned-runtime allowlist; Host
   is checked locally but never used for upstream routing. HTTPX has no environment
   proxy, transport retry, or cookie acceptance. Response cookies and raw error
-  bodies are never forwarded.
+  bodies are never forwarded. Before every upstream attempt, including after
+  credential refresh, the runtime uses native `account/read` to verify the
+  selected account's discovered `workspaceRouting`. It must match the request's
+  account, the fixed `https://chatgpt.com` origin and `NO_CONSTRAINT`. This check
+  is mandatory even when the opaque loopback provider URL suppresses native
+  routing headers. Missing, ambiguous, changed or restricted routing fails closed;
+  unsupported regional/FedRAMP accounts are not sent to an arbitrary backend.
 - Bounds are 32 KiB headers, 10 MiB request body, 16 MiB streamed response, four
   admitted connection tasks per Runtime, and one upstream connection. Streaming
-  uses bounded chunks and backpressure with write/idle deadlines, within the
-  generation's 85-second lifetime. Closing a Runtime closes its listener, owned
+  uses bounded chunks and backpressure within the generation's 85-second
+  lifetime, without an independent 15-second read cutoff. Closing a Runtime closes its listener, owned
   tasks, client and any in-flight stream.
 
 The actual-binary probe deliberately delays the stdio notification consumer in
@@ -160,6 +182,36 @@ the runtime as before. The probe also sends two explicit generations through
 different paths in the same process and checks that a stale path is rejected
 while the second budget is armed. `tool_continuation_guarded`, `relay_used` and
 `relay_paths_isolated` are mandatory proofs, not configuration bypass flags.
+
+### Safe Failure Contract
+
+The relay retains only a fixed failure category and numeric upstream status.
+Small identity-encoded JSON errors may refine the category from recognized
+`error.code`/`error.type` values; provider messages and bodies are discarded.
+Encoded non-success responses retain their HTTP classification, so a compressed
+401 cannot accidentally disable bounded credential recovery. Encoded successful
+SSE remains unsupported and is reported as `response_encoding`, never forwarded
+as undecoded bytes.
+
+Native `error` and failed-turn events are validated as domain failures rather
+than indiscriminately treated as malformed RPC. Only known `codexErrorInfo`
+variants/statuses influence the public classification. The first meaningful
+category survives process abort, pending-call failure and cleanup.
+
+Bridge errors carry `X-Evencomms-Codex-Error`, whose values come only from
+`errors.py`. The main backend accepts a known code only with its matching HTTP
+status, constructs its own fixed message, and adds a `[codex:code]` marker. Raw
+bridge/provider bodies, arbitrary headers, account data and native stderr never
+reach the browser. A ChatGPT authentication failure is 409, not operator-session
+401; a private bridge-auth mismatch has a separate `bridge_auth` diagnostic.
+
+The additional native-chat integration tests exercise both real FastAPI layers,
+production Session/Generation, the pinned executable and the real relay against
+loopback OAuth/SSE fixtures. They cover text/images, metadata, quota/model errors,
+SSE failure and tool rejection. Regional routing and routing changes following
+OAuth refresh are exercised through native discovery, not just injected headers;
+restricted attempts forward no inference content. This is still not live-account
+verification.
 
 ### Credential Custody
 
