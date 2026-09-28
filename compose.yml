@@ -10,13 +10,14 @@ services:
   server:
     build:
       context: .
-    image: evencomms:0.4.2
+    image: evencomms:0.4.3
     pull_policy: never
     init: true
     restart: unless-stopped
     environment:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set a nonempty ADMIN_PASSWORD in .env}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
+      ALLOW_EVEN_LOCALHOST: ${ALLOW_EVEN_LOCALHOST:-false}
       DATABASE_PATH: /data/evencomms.sqlite3
       MODEL_CACHE: /data/models
       STT_ENABLED: ${STT_ENABLED:-true}

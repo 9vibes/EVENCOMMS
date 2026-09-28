@@ -35,10 +35,10 @@ def release_python(index):
 
 
 @pytest.mark.parametrize("requested,ref_type,ref_name,valid", [
-    ("", "branch", "main", True), ("0.4.2", "tag", "v0.4.2", True),
-    ("0.4.2", "tag", "v0.4.1", False), ("0.4.1", "branch", "main", False),
-    ("v0.4.2", "branch", "main", False), ("0.4.2+build", "branch", "main", False),
-    ("0.4.2-01", "branch", "main", False), ("0.4.2-" + "a" * 117, "branch", "main", False),
+    ("", "branch", "main", True), ("0.4.3", "tag", "v0.4.3", True),
+    ("0.4.3", "tag", "v0.4.1", False), ("0.4.1", "branch", "main", False),
+    ("v0.4.3", "branch", "main", False), ("0.4.3+build", "branch", "main", False),
+    ("0.4.3-01", "branch", "main", False), ("0.4.3-" + "a" * 117, "branch", "main", False),
 ])
 def test_release_version_gate(monkeypatch, tmp_path, requested, ref_type, ref_name, valid):
     monkeypatch.chdir(ROOT)
@@ -47,7 +47,7 @@ def test_release_version_gate(monkeypatch, tmp_path, requested, ref_type, ref_na
         monkeypatch.setenv(key, value)
     if valid:
         exec(release_python(0), {})
-        assert (tmp_path / "output").read_text() == "version=0.4.2\n"
+        assert (tmp_path / "output").read_text() == "version=0.4.3\n"
     else:
         with pytest.raises(SystemExit) as error:
             exec(release_python(0), {})
@@ -69,7 +69,7 @@ def test_release_rejects_mismatched_package_lock_root(monkeypatch, directory):
         return content
 
     monkeypatch.chdir(ROOT)
-    monkeypatch.setenv("REQUESTED_VERSION", "0.4.2")
+    monkeypatch.setenv("REQUESTED_VERSION", "0.4.3")
     monkeypatch.setenv("GITHUB_REF_TYPE", "branch")
     monkeypatch.setattr(Path, "read_text", read)
     with pytest.raises(SystemExit, match="package-lock root versions"):
@@ -103,13 +103,13 @@ def test_both_registry_tags_must_be_confirmed_absent(monkeypatch, capsys, respon
             {"errors": [{"code": code}]} if code else {}).encode()
         raise urllib.error.HTTPError(request.full_url, status, private, {}, io.BytesIO(body))
 
-    for key, value in {"GITHUB_ACTOR": "fixture", "GH_TOKEN": private, "VERSION": "0.4.2",
+    for key, value in {"GITHUB_ACTOR": "fixture", "GH_TOKEN": private, "VERSION": "0.4.3",
                        "IMAGE": "ghcr.io/9vibes/evencomms"}.items():
         monkeypatch.setenv(key, value)
     monkeypatch.setattr(urllib.request, "urlopen", urlopen)
     if valid:
         exec(release_python(1), {})
-        assert [url.rsplit("/", 1)[-1] for url in calls[1:]] == ["0.4.2", "0.4.2-codex"]
+        assert [url.rsplit("/", 1)[-1] for url in calls[1:]] == ["0.4.3", "0.4.3-codex"]
     else:
         with pytest.raises(SystemExit) as error:
             exec(release_python(1), {})
@@ -123,7 +123,7 @@ def test_publication_checks_both_ids_before_tagging(checks, monkeypatch, tmp_pat
     import container_smoke
     program = release_python(2)
     monkeypatch.chdir(tmp_path)
-    for key, value in {"IMAGE": "ghcr.io/9vibes/evencomms", "VERSION": "0.4.2",
+    for key, value in {"IMAGE": "ghcr.io/9vibes/evencomms", "VERSION": "0.4.3",
                        "GITHUB_REPOSITORY": "9Vibes/EVENCOMMS", "GITHUB_SHA": "c" * 40,
                        "RUNNER_TEMP": str(tmp_path), "GITHUB_STEP_SUMMARY": str(tmp_path / "summary")}.items():
         monkeypatch.setenv(key, value)
@@ -135,7 +135,7 @@ def test_publication_checks_both_ids_before_tagging(checks, monkeypatch, tmp_pat
 
     def image_info(reference, user, labels):
         calls.append(("check", reference))
-        assert labels["org.opencontainers.image.version"] == "0.4.2"
+        assert labels["org.opencontainers.image.version"] == "0.4.3"
         if user == "10002:10002":
             assert labels["org.opencontainers.image.codex-version"] == "0.157.1"
         return references[reference]
@@ -161,37 +161,38 @@ def test_publication_checks_both_ids_before_tagging(checks, monkeypatch, tmp_pat
     exec(program, {})
     assert [call[0] for call in calls[:4]] == ["check"] * 4
     assert [call for call in calls if call[0] == "tag"] == [
-        ("tag", APP_ID, "ghcr.io/9vibes/evencomms:0.4.2"),
-        ("tag", BRIDGE_ID, "ghcr.io/9vibes/evencomms:0.4.2-codex"),
+        ("tag", APP_ID, "ghcr.io/9vibes/evencomms:0.4.3"),
+        ("tag", BRIDGE_ID, "ghcr.io/9vibes/evencomms:0.4.3-codex"),
     ]
     assert (tmp_path / "image-reference.txt").read_text() == "ghcr.io/9vibes/evencomms@" + APP_ID + "\n"
     assert (tmp_path / "codex-image-reference.txt").read_text() == "ghcr.io/9vibes/evencomms@" + BRIDGE_ID + "\n"
     metadata = json.loads((tmp_path / "release-images.json").read_text())
-    assert metadata["version"] == "0.4.2" and metadata["platform"] == "linux/amd64"
+    assert metadata["version"] == "0.4.3" and metadata["platform"] == "linux/amd64"
     assert metadata["images"]["codex"]["image_id"] == BRIDGE_ID
 
 
-def test_release_upgrade_gates_keep_legacy_checks_and_pinned_040_041():
+def test_release_upgrade_gates_keep_legacy_checks_and_pinned_040_041_042():
     workflow = (ROOT / ".github/workflows/release.yml").read_text()
     pulls = re.findall(r"docker pull (ghcr.io/9vibes/evencomms:[^\s]+)", workflow)
     upgrades = re.findall(r"--upgrade-from (ghcr.io/9vibes/evencomms:[^\s]+)", workflow)
     assert pulls == upgrades
-    assert [ref.split(":")[1].split("@")[0] for ref in upgrades] == ["0.1.0", "0.2.1", "0.3.0", "0.4.0", "0.4.1"]
-    assert upgrades[-2] == (
+    assert [ref.split(":")[1].split("@")[0] for ref in upgrades] == ["0.1.0", "0.2.1", "0.3.0", "0.4.0", "0.4.1", "0.4.2"]
+    assert upgrades[-3] == (
         "ghcr.io/9vibes/evencomms:0.4.0@sha256:"
         "0b22e2b2d2967e55f244985ebc16cdac3426c852527f83398dce7b639b5e6d15"
     )
-    assert upgrades[-1] == (
+    assert upgrades[-2] == (
         "ghcr.io/9vibes/evencomms:0.4.1@sha256:"
         "bb72aa606eaa2dd217dfd80076c121449b5d05bb897996aa540d4cd346f941ab"
     )
+    assert upgrades[-1] == "ghcr.io/9vibes/evencomms:0.4.2@sha256:929b7d98c0626325878aee764ebd5767d76b5d3b4656b1e8b475f362cd1e74e2"
     steps = workflow.split("      - name: ")
     upgrade_steps = [step for step in steps if "--upgrade-from " in step]
     for step in upgrade_steps:
         assert '--image "$(cat "$RUNNER_TEMP/release-image-id")"' in step
         assert '--speech-pcm "$RUNNER_TEMP/speech.pcm"' in step
-        assert ("--upgrade-private-auth" in step) == any(ref in step for ref in upgrades[-2:])
-    assert workflow.index("Verify 0.4.1 upgrade") < workflow.index("Preflight BOTH immutable tags")
+        assert ("--upgrade-private-auth" in step) == any(ref in step for ref in upgrades[-3:])
+    assert workflow.index("Verify 0.4.2 upgrade") < workflow.index("Preflight BOTH immutable tags")
 
 
 @pytest.mark.parametrize("prior_auth", [False, True])
@@ -360,7 +361,7 @@ def test_failed_smoke_cleans_up_only_owned_resources(checks, monkeypatch, tmp_pa
     monkeypatch.setattr(checks, "uuid4", lambda: SimpleNamespace(hex="d" * 32))
     monkeypatch.setattr(checks.tempfile, "TemporaryDirectory", lambda **kwargs: nullcontext(str(tmp_path)))
     monkeypatch.setattr(checks.sys, "argv", ["codex_container_smoke", "--image", APP_ID,
-        "--codex-image", BRIDGE_ID, "--version", "0.4.2", "--revision", "c" * 40,
+        "--codex-image", BRIDGE_ID, "--version", "0.4.3", "--revision", "c" * 40,
         "--source", "https://github.com/9Vibes/EVENCOMMS"])
     with pytest.raises(RuntimeError, match="network-none real Codex production probe") as error:
         checks.main()

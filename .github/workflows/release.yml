@@ -116,6 +116,7 @@ jobs:
           docker pull ghcr.io/9vibes/evencomms:0.3.0@sha256:2e81e2c04292e4d48f38fa3c568eb2742d0afbe8a0e468db6c4c62e1d5f3e6c3
           docker pull ghcr.io/9vibes/evencomms:0.4.0@sha256:0b22e2b2d2967e55f244985ebc16cdac3426c852527f83398dce7b639b5e6d15
           docker pull ghcr.io/9vibes/evencomms:0.4.1@sha256:bb72aa606eaa2dd217dfd80076c121449b5d05bb897996aa540d4cd346f941ab
+          docker pull ghcr.io/9vibes/evencomms:0.4.2@sha256:929b7d98c0626325878aee764ebd5767d76b5d3b4656b1e8b475f362cd1e74e2
       - name: Verify fresh candidate with cold CPU STT and generated configs
         run: |
           python scripts/container_smoke.py \
@@ -151,6 +152,13 @@ jobs:
           python scripts/container_smoke.py \
             --image "$(cat "$RUNNER_TEMP/release-image-id")" \
             --upgrade-from ghcr.io/9vibes/evencomms:0.4.1@sha256:bb72aa606eaa2dd217dfd80076c121449b5d05bb897996aa540d4cd346f941ab \
+            --upgrade-private-auth \
+            --speech-pcm "$RUNNER_TEMP/speech.pcm"
+      - name: Verify 0.4.2 upgrade with persistent data and prior private token
+        run: |
+          python scripts/container_smoke.py \
+            --image "$(cat "$RUNNER_TEMP/release-image-id")" \
+            --upgrade-from ghcr.io/9vibes/evencomms:0.4.2@sha256:929b7d98c0626325878aee764ebd5767d76b5d3b4656b1e8b475f362cd1e74e2 \
             --upgrade-private-auth \
             --speech-pcm "$RUNNER_TEMP/speech.pcm"
       - name: Verify final image IDs, OCI labels, private pair and real RTMP/HLS/browser playback

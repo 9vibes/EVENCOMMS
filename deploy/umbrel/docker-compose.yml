@@ -1,4 +1,4 @@
-# STAGING ONLY: build/load evencomms:0.4.2 and evencomms-codex:0.4.2 from source.
+# STAGING ONLY: build/load evencomms:0.4.3 and evencomms-codex:0.4.3 from source.
 # Umbrel supplies app_proxy's image and its platform compose configuration.
 x-logging: &logging
   driver: json-file
@@ -16,7 +16,7 @@ services:
     logging: *logging
 
   data_init:
-    image: evencomms:0.4.2
+    image: evencomms:0.4.3
     pull_policy: never
     user: "0:0"
     command: [python, -m, backend.init_data, --config-dir, /config, --codex-auth-dir, /codex-auth]
@@ -34,7 +34,7 @@ services:
     logging: *logging
 
   server:
-    image: evencomms:0.4.2
+    image: evencomms:0.4.3
     pull_policy: never
     init: true
     restart: unless-stopped
@@ -44,6 +44,7 @@ services:
     environment:
       ADMIN_PASSWORD: ${APP_PASSWORD:?Umbrel must provide a nonempty APP_PASSWORD}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://${DEVICE_DOMAIN_NAME:-umbrel.local}:28097}
+      ALLOW_EVEN_LOCALHOST: ${ALLOW_EVEN_LOCALHOST:-false}
       DATABASE_PATH: /data/evencomms.sqlite3
       MODEL_CACHE: /data/models
       STT_ENABLED: ${STT_ENABLED:-true}
@@ -79,7 +80,7 @@ services:
     logging: *logging
 
   codex-bridge:
-    image: evencomms-codex:0.4.2
+    image: evencomms-codex:0.4.3
     pull_policy: never
     user: "10002:10002"
     init: true

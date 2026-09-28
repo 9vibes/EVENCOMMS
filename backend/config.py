@@ -43,6 +43,7 @@ class Settings:
     database_path: Path = ROOT / "data/evencomms.sqlite3"
     frontend_dist: Path = ROOT / "frontend/dist"
     allowed_origins: tuple[str, ...] = ()
+    allow_even_localhost: bool = False
     stt_enabled: bool = True
     stt_model: str = "base.en"
     model_cache: Path = ROOT / "data/models"
@@ -67,6 +68,8 @@ class Settings:
     def __post_init__(self):
         if not self.admin_password or not self.admin_password.strip():
             raise ValueError("ADMIN_PASSWORD must be set to a nonempty password")
+        if type(self.allow_even_localhost) is not bool:
+            raise ValueError("ALLOW_EVEN_LOCALHOST must be a boolean")
         for origin in self.allowed_origins:
             parsed = urlsplit(origin)
             if (parsed.scheme not in {"http", "https"} or not parsed.netloc
@@ -123,6 +126,7 @@ class Settings:
             frontend_dist=Path(os.getenv("FRONTEND_DIST", str(ROOT / "frontend/dist"))),
             allowed_origins=tuple(value.strip().rstrip("/") for value in
                                   os.getenv("ALLOWED_ORIGINS", "").split(",") if value.strip()),
+            allow_even_localhost=env_bool("ALLOW_EVEN_LOCALHOST", "false"),
             stt_enabled=env_bool("STT_ENABLED", "true"),
             stt_model=os.getenv("STT_MODEL", "base.en"),
             model_cache=Path(os.getenv("MODEL_CACHE", str(ROOT / "data/models"))),
