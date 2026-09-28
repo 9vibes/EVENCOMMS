@@ -1,26 +1,27 @@
-# Research Chat: API Mode
+# Research Chat: Code Login and Legacy API Reference
 
 RESEARCH is an operator-only OpenAI chat with optional still-frame attachments.
 It is separate from wearer conversations and never automatically replies to the
 glasses. No continuous video, audio, stream key, or unsent wearer draft is sent to
 OpenAI. Capturing a frame only adds a local draft attachment; Send is explicit.
 
-This page describes the **OpenAI API key** connection introduced in 0.3.0 and
-retained as the default in 0.4.2. The **ChatGPT account
-(Experimental Codex)** option has separate authentication, eligible-plan allowance
-and retention behavior. It remains experimental, with no model-entitlement
-guarantee. See [its setup and privacy guide](codex.md).
-Switching providers clears the local conversation after confirmation; it never
-replays history to a different provider or silently falls back to API billing.
+The current Research tab uses **code login only**. Open it and choose **Get Codex
+login code**, then select a model and **Send via Codex**. See [the current setup
+and privacy guide](codex.md). API-key entry and provider switching are removed
+from the UI, and Research makes no requests to the legacy API-key endpoints.
 
-Since 0.4.0, the Umbrel source package includes an isolated idle bridge and automatically
-provisions its private service token, not an account login. Startup runs synthetic
-loopback probes only; actual account use requires provider choice, device login,
-an explicit model and Send. Standalone deployments require `compose.codex.yml`
-and a private `.env` service token. A failed bridge does not block API Research or
-other app features. Existing optional API keys and user overrides are unchanged.
-The 0.4.1 trusted-network HTTP device-login confirmation is Codex-only; API-key
-entry still requires HTTPS or exact localhost/loopback.
+Replies now appear progressively while Codex generates them. The browser requests
+`application/x-ndjson` from `/api/research/codex/chat`; the server forwards validated
+agent text updates from the bridge. Only a final `done` event commits a reply to
+history. A failed or disconnected stream clears the provisional reply and keeps
+the question and frames for a manual retry. New chat discards late updates.
+Clients requesting JSON retain the existing complete-response format. Rebuild both
+the server (including frontend assets) and Codex bridge to enable live delivery.
+
+The remaining sections below document the retained backend API-key interfaces
+for compatibility; references to the older API-key form are historical and do
+not describe the current operator UI. These endpoints are not an automatic
+fallback for code login.
 
 ## Connection And Privacy
 

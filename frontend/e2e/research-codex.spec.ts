@@ -36,7 +36,7 @@ async function mockCodex(page: Page, token: string) {
     hold: new Set<string>(), held: new Map<string, Route>(), chatError: false,
   };
   page.on('request', request => {
-    if (new URL(request.url()).pathname === '/api/research/chat') mock.apiChats.push(request.url());
+    if (/^\/api\/research\/(status|models|connection|chat)$/.test(new URL(request.url()).pathname)) mock.apiChats.push(request.url());
   });
   await page.route('**/api/research/status', route => route.fulfill({ json: { configured: false, key_source: null } }));
   await page.route('**/api/research/codex/**', async route => {
@@ -95,20 +95,14 @@ const test = base.extend<{ codexMock: Awaited<ReturnType<typeof mockCodex>> }, {
     await page.goto('/');
     await expect(page.getByText('SERVICE ONLINE', { exact: true })).toBeVisible();
     await page.getByRole('tab', { name: 'RESEARCH', exact: true }).click();
-    await expect(page.getByText('Not configured', { exact: true })).toBeVisible();
+    await expect(page.getByText('ChatGPT disconnected', { exact: true })).toBeVisible();
     await use(mock);
     expect(mock.apiChats, 'Codex must never fall back to paid API chat').toEqual([]);
   }, { timeout: 90_000 }],
 });
 
-async function changeProvider(page: Page, provider: 'api' | 'codex', accept = true) {
-  page.once('dialog', async dialog => {
-    expect(dialog.type()).toBe('confirm');
-    expect(dialog.message()).toContain('clear the displayed history, question and captured frames');
-    if (accept) await dialog.accept();
-    else await dialog.dismiss();
-  });
-  await page.getByLabel('Research provider', { exact: true }).selectOption(provider);
+async function refreshConnection(page: Page) {
+  await page.getByRole('button', { name: 'Refresh Codex connection' }).click();
 }
 
 async function selectModel(page: Page) {
@@ -118,25 +112,21 @@ async function selectModel(page: Page) {
   await selector.selectOption(modelID);
 }
 
-test('API stays the default; disabled, unmapped and unverified Codex fail closed', async ({ page, codexMock: mock }) => {
-  const provider = page.getByLabel('Research provider', { exact: true });
-  await expect(provider).toHaveValue('api');
-  await expect(provider.locator('option')).toHaveText(['OpenAI API key', 'ChatGPT account (Experimental Codex)']);
-  expect(mock.calls).toEqual([]);
-  await page.getByLabel('Research question', { exact: true }).fill('Unsent API draft must not leave this browser');
+test('code login is the only method; disabled, unmapped and unverified Codex fail closed', async ({ page, codexMock: mock }) => {
+  await expect(page.getByLabel('Research provider', { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('OpenAI API key', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Send to OpenAI', exact: true })).toHaveCount(0);
+  await page.getByLabel('Research question', { exact: true }).fill('Unsent draft stays local');
   mock.status = { ...disconnected, enabled: false };
-  await changeProvider(page, 'codex');
-  await expect(page.getByLabel('Research question', { exact: true })).toHaveValue('');
+  await refreshConnection(page);
+  await expect(page.getByLabel('Research question', { exact: true })).toHaveValue('Unsent draft stays local');
   await expect(page.getByText('Codex account login is disabled on this server.', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Get Codex login code', exact: true })).toBeDisabled();
-  await expect(page.getByText(/Experimental Codex connection/)).toContainText('docs/codex.md');
-  await expect(page.getByLabel('OpenAI API key', { exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Send via Codex', exact: true })).toBeDisabled();
-  expect(mock.calls).toEqual(['status']);
 
   mock.status = { ...connected, generation_enabled: false };
   await page.getByRole('button', { name: 'Refresh Codex connection' }).click();
-  await expect(page.getByText('Runtime verification did not pass; sending disabled. API not used automatically.', { exact: true })).toBeVisible();
+  await expect(page.getByText('Runtime verification did not pass; sending disabled.', { exact: true })).toBeVisible();
   await page.getByLabel('Research question', { exact: true }).fill('Do not transmit with an unverified runtime');
   await page.getByLabel('Research question', { exact: true }).press('Control+Enter');
   await expect(page.getByLabel('Codex model selector', { exact: true })).toBeDisabled();
@@ -149,7 +139,7 @@ test('API stays the default; disabled, unmapped and unverified Codex fail closed
   const stopped = mock.calls.length;
   await page.waitForTimeout(2200);
   expect(mock.calls).toHaveLength(stopped);
-  await expect(provider).toHaveValue('codex');
+  await expect(page.getByLabel('Research provider', { exact: true })).toHaveCount(0);
 });
 
 test('HTTP device-code login requires confirmation without enabling API-key entry', async ({ page, codexMock: mock }) => {
@@ -158,8 +148,8 @@ test('HTTP device-code login requires confirmation without enabling API-key entr
   await page.goto('http://umbrel.localhost:8765/');
   await expect(page.getByText('SERVICE ONLINE', { exact: true })).toBeVisible();
   await page.getByRole('tab', { name: 'RESEARCH', exact: true }).click();
-  await expect(page.getByLabel('OpenAI API key', { exact: true })).toBeDisabled();
-  await changeProvider(page, 'codex');
+  await expect(page.getByLabel('OpenAI API key', { exact: true })).toHaveCount(0);
+  await refreshConnection(page);
   const getCode = page.getByRole('button', { name: 'Get Codex login code', exact: true });
   await expect(getCode).toBeEnabled();
   await expect(page.getByText(/Code login is available after a trusted-network confirmation/)).toBeVisible();
@@ -181,13 +171,11 @@ test('HTTP device-code login requires confirmation without enabling API-key entr
   expect(mock.chats).toEqual([]);
   await page.getByRole('button', { name: 'Cancel sign-in', exact: true }).click();
   await expect(page.getByText('ChatGPT disconnected', { exact: true })).toBeVisible();
-  await changeProvider(page, 'api');
-  await expect(page.getByLabel('OpenAI API key', { exact: true })).toBeDisabled();
-  await expect(page.getByRole('button', { name: 'Connect for this sign-in', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Connect for this sign-in', exact: true })).toHaveCount(0);
 });
 
 test('device login polls without drafts, then explicit model selection and Send authenticate the exact chat body', async ({ page, codexMock: mock }) => {
-  await changeProvider(page, 'codex');
+  await refreshConnection(page);
   const question = page.getByLabel('Research question', { exact: true });
   const send = page.getByRole('button', { name: 'Send via Codex', exact: true });
   await question.fill('Only this explicit question should be sent');
@@ -233,7 +221,7 @@ test('device login polls without drafts, then explicit model selection and Send 
 });
 
 test('Cancel sign-in and Disconnect clear state immediately, ignore late polls and keep Codex selected', async ({ page, codexMock: mock }) => {
-  await changeProvider(page, 'codex');
+  await refreshConnection(page);
   await page.getByRole('button', { name: 'Get Codex login code', exact: true }).click();
   await expect(page.getByLabel('ChatGPT device code', { exact: true })).toBeVisible();
   mock.hold.add('status');
@@ -244,7 +232,7 @@ test('Cancel sign-in and Disconnect clear state immediately, ignore late polls a
   await mock.held.get('status')!.fulfill({ json: connected }).catch(() => {});
   mock.hold.delete('status');
   await expect(page.getByLabel('ChatGPT device code', { exact: true })).toHaveCount(0);
-  await expect(page.getByLabel('Research provider', { exact: true })).toHaveValue('codex');
+  await expect(page.getByLabel('Research provider', { exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Send via Codex', exact: true })).toBeDisabled();
   expect(mock.calls).not.toContain('models');
   expect(mock.calls.filter(path => path === 'connection')).toHaveLength(1);
@@ -272,53 +260,36 @@ test('Cancel sign-in and Disconnect clear state immediately, ignore late polls a
   await expect(page.getByRole('button', { name: 'Send via Codex', exact: true })).toBeDisabled();
   await mock.held.get('connection')!.fulfill({ json: disconnected });
   await expect(page.getByText('ChatGPT disconnected', { exact: true })).toBeVisible();
-  await expect(page.getByLabel('Research provider', { exact: true })).toHaveValue('codex');
+  await expect(page.getByLabel('Research provider', { exact: true })).toHaveCount(0);
 });
 
-test('provider confirmation clears drafts and history, never replays them, and discards a late chat reply', async ({ page, codexMock: mock }) => {
+test('New chat clears drafts and history and discards a late reply without changing login', async ({ page, codexMock: mock }) => {
   mock.status = { ...connected };
-  await changeProvider(page, 'codex');
+  await refreshConnection(page);
   await selectModel(page);
   const question = page.getByLabel('Research question', { exact: true });
   const log = page.getByRole('log', { name: 'Research conversation' });
-  await question.fill('Old Codex conversation');
+  await question.fill('Old conversation');
   await page.getByRole('button', { name: 'Send via Codex', exact: true }).click();
   await expect(log.locator('li')).toHaveCount(2);
-  await question.fill('Unsent Codex draft');
-  await changeProvider(page, 'api', false);
-  await expect(page.getByLabel('Research provider', { exact: true })).toHaveValue('codex');
-  await expect(question).toHaveValue('Unsent Codex draft');
-  await expect(log.locator('li')).toHaveCount(2);
-  const oldPreview = await page.locator('video').elementHandle();
-  await changeProvider(page, 'api');
-  expect(await oldPreview!.evaluate(element => element.isConnected)).toBe(false);
-  await expect(question).toHaveValue('');
-  await expect(log.locator('li')).toHaveCount(0);
-  await expect(page.getByLabel('OpenAI model', { exact: true })).toHaveValue('');
-  await expect(page.getByLabel('OpenAI model', { exact: true }).locator('option')).toHaveText(['Select an available model']);
-  await question.fill('API draft that must not enter Codex');
-  await changeProvider(page, 'codex');
-  await expect(question).toHaveValue('');
-  await selectModel(page);
-  await question.fill('New isolated Codex conversation');
+  await question.fill('Unsent draft');
+  page.once('dialog', dialog => dialog.dismiss());
+  await page.getByRole('button', { name: 'New chat', exact: true }).click();
+  await expect(question).toHaveValue('Unsent draft');
   mock.hold.add('chat');
   await page.getByRole('button', { name: 'Send via Codex', exact: true }).click();
   await expect.poll(() => mock.chats.length).toBe(2);
-  expect(mock.chats[1].messages).toEqual([{ role: 'user', text: 'New isolated Codex conversation', images: [] }]);
-  expect(mock.chats[1].request_id).not.toBe(mock.chats[0].request_id);
-  await changeProvider(page, 'api');
+  page.once('dialog', dialog => dialog.accept());
+  await page.getByRole('button', { name: 'New chat', exact: true }).click();
   await reply(mock.held.get('chat')!).catch(() => {});
   await expect(log.locator('li')).toHaveCount(0);
   await expect(question).toHaveValue('');
-  await expect(page.getByRole('button', { name: 'Send to OpenAI', exact: true })).toBeDisabled();
-  const apiPreview = await page.locator('video').elementHandle();
-  await page.getByRole('button', { name: 'New chat', exact: true }).click();
-  expect(await apiPreview!.evaluate(element => element.isConnected)).toBe(true);
+  await expect(page.getByText('ChatGPT connected', { exact: true })).toBeVisible();
   expect(mock.calls.filter(path => path === 'login' || path === 'connection')).toEqual([]);
 });
 
 test('pending login can be cancelled before HTTP completes; leaving stops polls without replaying login or stale models', async ({ page, codexMock: mock }) => {
-  await changeProvider(page, 'codex');
+  await refreshConnection(page);
   mock.hold.add('login');
   await page.getByRole('button', { name: 'Get Codex login code', exact: true }).click();
   await expect.poll(() => mock.held.has('login')).toBe(true);
@@ -344,11 +315,11 @@ test('pending login can be cancelled before HTTP completes; leaving stops polls 
   mock.status = { ...connected };
   mock.hold.add('models');
   await expect.poll(() => mock.held.has('models')).toBe(true);
-  await changeProvider(page, 'api');
+  await page.getByRole('tab', { name: 'OPERATOR', exact: true }).click();
   await mock.held.get('models')!.fulfill({ json: { models: mock.models } }).catch(() => {});
-  await expect(page.getByLabel('OpenAI model', { exact: true }).locator('option')).toHaveText(['Select an available model']);
+  mock.hold.delete('models');
   mock.status = { ...disconnected, state: 'failed' };
-  await changeProvider(page, 'codex');
+  await page.getByRole('tab', { name: 'RESEARCH', exact: true }).click();
   await expect(page.getByText('ChatGPT sign-in failed', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Get Codex login code', exact: true })).toBeEnabled();
   await expect(page.getByLabel('ChatGPT device code', { exact: true })).toHaveCount(0);
@@ -358,7 +329,7 @@ test('pending login can be cancelled before HTTP completes; leaving stops polls 
 test('runtime retry is manual with the same UUID; idle polling never interrupts chat and detects a closed generation gate', async ({ page, codexMock: mock }) => {
   test.setTimeout(120_000);
   mock.status = { ...connected };
-  await changeProvider(page, 'codex');
+  await refreshConnection(page);
   await selectModel(page);
   const question = page.getByLabel('Research question', { exact: true });
   const send = page.getByRole('button', { name: 'Send via Codex', exact: true });
@@ -392,17 +363,17 @@ test('runtime retry is manual with the same UUID; idle polling never interrupts 
   await expect(page.getByRole('log', { name: 'Research conversation' }).locator('li')).toHaveCount(2);
   await expect(page.getByText('ChatGPT connected', { exact: true })).toBeVisible();
   mock.status = { ...connected, generation_enabled: false };
-  await expect(page.getByText('Runtime verification did not pass; sending disabled. API not used automatically.', { exact: true })).toBeVisible({ timeout: 35_000 });
+  await expect(page.getByText('Runtime verification did not pass; sending disabled.', { exact: true })).toBeVisible({ timeout: 35_000 });
   await expect(page.getByLabel('Codex model selector', { exact: true })).toHaveValue('');
   await expect(page.getByLabel('Codex model selector', { exact: true })).toBeDisabled();
   await expect(send).toBeDisabled();
   expect(mock.chats).toHaveLength(2);
-  await expect(page.getByLabel('Research provider', { exact: true })).toHaveValue('codex');
+  await expect(page.getByLabel('Research provider', { exact: true })).toHaveCount(0);
 });
 
 test('untrusted device instructions are not navigable and the established UI fits mobile and desktop', async ({ page, codexMock: mock }, testInfo) => {
   mock.status = { ...pending, verification_url: 'https://auth.openai.com.evil.test/codex/device' };
-  await changeProvider(page, 'codex');
+  await refreshConnection(page);
   for (const [url, code] of [
     ['https://auth.openai.com.evil.test/codex/device', 'CODE-1234'],
     ['https://auth.openai.com/codex/device?redirect=evil', 'CODE-1234'],
@@ -441,7 +412,7 @@ test('untrusted device instructions are not navigable and the established UI fit
 
 test('real operator logout revokes its token and stops a held pending poll without exposing a late code', async ({ page, codexMock: mock }) => {
   mock.status = { ...pending };
-  await changeProvider(page, 'codex');
+  await refreshConnection(page);
   await expect(page.getByLabel('ChatGPT device code', { exact: true })).toBeVisible();
   await page.getByLabel('Research question', { exact: true }).fill('Private draft cleared on logout');
   mock.hold.add('status');
@@ -459,3 +430,58 @@ test('real operator logout revokes its token and stops a held pending poll witho
   expect(await page.evaluate(() => sessionStorage.getItem('evencomms.operator.token'))).toBeNull();
   expect(mock.chats).toEqual([]);
 });
+
+
+for (const ending of ['complete', 'failed', 'cleared'] as const) {
+  test(`live Codex reply is visible before ${ending} and never commits unconfirmed text`, async ({ page, codexMock: mock }) => {
+    mock.status = { ...connected };
+    await refreshConnection(page);
+    await selectModel(page);
+    await page.evaluate(() => {
+      const original = window.fetch;
+      window.fetch = async (input, options) => {
+        if (String(input) !== '/api/research/codex/chat') return original(input, options);
+        const body = JSON.parse(String(options?.body));
+        return new Response(new ReadableStream({
+          start(controller) {
+            (window as any).researchChunk = (event: unknown) => {
+              try { controller.enqueue(new TextEncoder().encode(JSON.stringify(event) + '\n')); } catch {}
+            };
+            (window as any).researchFinish = () => {
+              controller.enqueue(new TextEncoder().encode(JSON.stringify({ type: 'done', response: {
+                request_id: body.request_id, model: body.model, text: 'The complete streamed answer.', incomplete: false, usage: null,
+              } }) + '\n'));
+              controller.close();
+            };
+            options?.signal?.addEventListener('abort', () => controller.error(new DOMException('Aborted', 'AbortError')));
+          },
+        }), { headers: { 'Content-Type': 'application/x-ndjson' } });
+      };
+    });
+    await page.getByLabel('Research question', { exact: true }).fill('A streamed question');
+    await page.getByRole('button', { name: 'Send via Codex', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Waiting for Codex...', exact: true })).toBeDisabled();
+    await page.evaluate(() => (window as any).researchChunk({ type: 'text', text: 'The first streamed words' }));
+    const log = page.getByRole('log', { name: 'Research conversation' });
+    await expect(log.getByText('The first streamed words', { exact: true })).toBeVisible();
+    await expect(page.getByLabel('Research question', { exact: true })).toHaveValue('A streamed question');
+    if (ending === 'complete') {
+      await page.evaluate(() => (window as any).researchFinish());
+      await expect(log.getByText('The complete streamed answer.', { exact: true })).toBeVisible();
+      await expect(log.locator('li')).toHaveCount(2);
+      await expect(page.getByLabel('Research question', { exact: true })).toHaveValue('');
+    } else if (ending === 'failed') {
+      await page.evaluate(() => (window as any).researchChunk({ type: 'error', status: 429, detail: 'Usage limit reached' }));
+      await expect(page.getByRole('alert').filter({ hasText: 'Reply not confirmed' })).toBeVisible();
+      await expect(log.locator('li')).toHaveCount(0);
+      await expect(page.getByLabel('Research question', { exact: true })).toHaveValue('A streamed question');
+    } else {
+      page.once('dialog', dialog => dialog.accept());
+      await page.getByRole('button', { name: 'New chat', exact: true }).click();
+      await page.evaluate(() => (window as any).researchChunk({ type: 'text', text: 'Late text must be ignored' }));
+      await expect(log.locator('li')).toHaveCount(0);
+      await expect(log).not.toContainText('Late text');
+      await expect(page.getByLabel('Research question', { exact: true })).toHaveValue('');
+    }
+  });
+}

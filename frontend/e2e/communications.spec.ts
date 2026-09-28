@@ -22,6 +22,7 @@ async function pair(operator: Page, wearer: Page, name: string) {
   await expect(wearer.getByText('STONE CONNECTED', { exact: true })).toBeVisible()
   await operator.getByRole('button', { name: new RegExp(name + '.*Connected') }).click()
   await expect(operator.getByRole('heading', { name, exact: true })).toBeVisible()
+  await expect(operator.getByRole('link', { name: /Open wearer client/ })).toHaveCount(0)
 }
 
 async function holdToSend(wearer: Page) {
@@ -142,6 +143,18 @@ test('real pairing, correction, deliberate send, reply, recovery and revocation'
       await operator.getByLabel('Your reply', { exact: true }).fill(reply)
       await operator.getByRole('button', { name: 'Send reply', exact: true }).click()
       await expect(wearer.locator('.phone-reply')).toContainText(reply)
+      const operatorPreview = operator.getByLabel('Last operator reply glasses preview')
+      await expect(operatorPreview).toContainText('EVENCOMMS · REPLY')
+      await expect(operatorPreview).toContainText('Meet at the north entrance.')
+      await expect(operatorPreview).toHaveCSS('color', 'rgb(131, 223, 163)')
+      const screen = operatorPreview.locator('.hud-screen')
+      const box = (await screen.boundingBox())!
+      expect(Math.abs(box.width / box.height - 2)).toBeLessThan(0.02)
+      const lastPage = operator.getByRole('button', { name: 'Next reply preview page' })
+      while (await lastPage.isEnabled()) await lastPage.click()
+      await expect(operatorPreview).toContainText('FINAL PAGE:')
+      await expect(lastPage).toBeDisabled()
+      await operator.getByRole('button', { name: 'Previous reply preview page' }).click()
       const preview = wearer.getByLabel('Glasses text preview')
       await expect(preview).toContainText(/REPLY 1\/[2-9]/)
       await expect(preview).toContainText('Meet at the north entrance.')

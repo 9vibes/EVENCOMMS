@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { characterCount, clientId, mergeMessages } from './api.ts';
+import { characterCount, clientId, mergeMessages, request, ApiError } from './api.ts';
 
 test('character limits count Unicode code points, including astral characters', () => {
   assert.equal(characterCount(''), 0);
@@ -36,4 +36,45 @@ test('same-timestamp messages preserve server order and duplicates use the lates
   assert.deepEqual(mergeMessages([], [first, second]), [first, second]);
   const updated = { ...first, text: 'Canonical server value' };
   assert.deepEqual(mergeMessages([first, second], [updated]), [updated, second]);
+});
+
+
+test('Research text arrives before completion, including split UTF-8 chunks', async () => {
+  const original = globalThis.fetch;
+  let controller;
+  let received;
+  const firstText = new Promise(resolve => { received = resolve; });
+  globalThis.fetch = async (_url, options) => {
+    assert.equal(options.headers.Accept, 'application/x-ndjson');
+    assert.equal(options.credentials, 'omit');
+    return new Response(new ReadableStream({ start(value) { controller = value; } }), {
+      headers: { 'Content-Type': 'application/x-ndjson' },
+    });
+  };
+  try {
+    let completed = false;
+    const result = request('/chat', 'token', new AbortController().signal, { onText: received })
+      .then(value => { completed = true; return value; });
+    const data = new TextEncoder().encode(JSON.stringify({ type: 'text', text: 'Hello 🌍' }) + '\n');
+    for (const byte of data) controller.enqueue(new Uint8Array([byte]));
+    assert.equal(await firstText, 'Hello 🌍');
+    assert.equal(completed, false);
+    controller.enqueue(new TextEncoder().encode(JSON.stringify({ type: 'done', response: { text: 'Hello world!' } }) + '\n'));
+    assert.deepEqual(await result, { text: 'Hello world!' });
+  } finally { globalThis.fetch = original; }
+});
+
+test('Research never accepts a partial response or an error as a completed answer', async () => {
+  const original = globalThis.fetch;
+  try {
+    for (const ending of ['', '{"type":"error","status":429,"detail":"Usage limit reached"}\n', '{bad json}\n']) {
+      globalThis.fetch = async () => new Response('{"type":"text","text":"Partial"}\n' + ending, {
+        headers: { 'Content-Type': 'application/x-ndjson' },
+      });
+      const seen = [];
+      await assert.rejects(request('/chat', null, new AbortController().signal, { onText: text => seen.push(text) }),
+        error => error instanceof ApiError && (ending.includes('429') ? error.status === 429 : error.status === 502));
+      assert.deepEqual(seen, ['Partial']);
+    }
+  } finally { globalThis.fetch = original; }
 });

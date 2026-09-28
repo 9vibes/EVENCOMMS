@@ -18,6 +18,7 @@ from pydantic import ValidationError
 
 from .errors import ERROR_HEADER, Failure
 from .generation import Generation
+from .reply_stream import stream_reply
 from .policy import BRIDGE_TOKEN_PATTERN, DEVICE_URL, MODELS, USER_CODE_PATTERN, generation_allowed
 from .private_token import load_token_file
 from .probe import run_probe, verify_binary
@@ -222,6 +223,7 @@ class Bridge:
         self.binary_verified = binary_verified
         self.sessions = {}
         self.validations = set()
+        self.stream_bodies = 0
         self.lock = asyncio.Lock()
         self.closed = False
         self.sweeper = asyncio.create_task(self.sweep())
@@ -292,7 +294,7 @@ class Bridge:
             await self.delete(identity)
         await asyncio.gather(*self.validations, return_exceptions=True)
 
-    async def chat(self, identity, request):
+    async def chat(self, identity, request, on_text=None):
         await self.prune()
         session = self.sessions.get(identity)
         if session and session.reason == "thread_cap":
@@ -339,6 +341,7 @@ class Bridge:
                     return result
                 session.threads += 1
                 session.generation = Generation()
+                session.generation.on_text = on_text
                 try:
                     result = await session.generation.run(session.runtime, data)
                 finally:
@@ -521,7 +524,19 @@ def create_app(*, token=None, token_file=None, binary=None, runtime_factory=Runt
 
     @app.post("/sessions/{session_id}/chat")
     async def chat(session_id: str, request: Request):
-        return await app.state.bridge.chat(identity(session_id), request)
+        session_id = identity(session_id)
+        if "application/x-ndjson" in request.headers.get("accept", ""):
+            # Consume the bounded body before StreamingResponse watches disconnects.
+            bridge = app.state.bridge
+            if bridge.stream_bodies >= 2:
+                raise HTTPException(429, "Codex request body readers are busy")
+            bridge.stream_bodies += 1
+            try:
+                request._body = bytes(await body(request, BODY_LIMIT))
+            finally:
+                bridge.stream_bodies -= 1
+            return stream_reply(lambda update: bridge.chat(session_id, request, update))
+        return await app.state.bridge.chat(session_id, request)
 
     @app.delete("/sessions/{session_id}", status_code=204)
     async def delete(session_id: str):

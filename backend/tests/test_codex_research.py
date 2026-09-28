@@ -1802,3 +1802,63 @@ def test_sweeper_releases_failed_login_capacity_without_status_polling(make_code
     connect(client, three)
     # Reap the final mocked session so shutdown also performs no redundant DELETE.
     client.portal.call(research.renew_leases)
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_streaming_chat_contract_and_cache(make_codex, failure):
+    class Chunks(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b'{"type":"text","text":"First words"}\n'
+            await asyncio.sleep(0.01)
+            if failure:
+                yield b'{"type":"error","code":"rate_limit","status":429,"detail":"private-secret"}\n'
+            else:
+                yield (json.dumps({"type": "done", "response": answer(data)}) + "\n").encode()
+    def handler(request):
+        if request.url.path.endswith("/chat"):
+            assert request.headers["accept"] == "application/x-ndjson"
+            return httpx.Response(200, stream=Chunks(), headers={"content-type": "application/x-ndjson"})
+        return bridge(request)
+    client, headers, calls = make_codex(handler)
+    connect(client, headers)
+    data = payload()
+    response = client.post(ROOT + "/chat", headers={**headers, "Accept": "application/x-ndjson"}, json=data)
+    assert response.status_code == 200
+    events = [json.loads(line) for line in response.text.splitlines() if line]
+    assert events[0] == {"type": "text", "text": "First words"}
+    assert events[-1]["type"] == ("error" if failure else "done")
+    assert "private-secret" not in response.text
+    research = client.app.state.codex_research
+    assert not research.chat_waiters
+    if failure:
+        assert not research.sessions[parent(headers)].results
+        assert events[-1]["status"] == 429
+    else:
+        assert events[-1]["response"] == answer(data)
+        assert data["request_id"] in research.sessions[parent(headers)].results
+        count = len([call for call in calls if call.url.path.endswith("/chat")])
+        retry = client.post(ROOT + "/chat", headers={**headers, "Accept": "application/x-ndjson"}, json=data)
+        assert '"type": "done"' in retry.text
+        assert len([call for call in calls if call.url.path.endswith("/chat")]) == count
+
+
+def test_bridge_transport_forwards_text_before_reading_completion(make_codex):
+    client, headers, _ = make_codex()
+    research = client.app.state.codex_research
+    async def run():
+        observed = asyncio.Event()
+        class Chunks(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                wire = '{"type":"text","text":"Live 🌍"}\n'.encode()
+                for byte in wire:
+                    yield bytes([byte])
+                await asyncio.wait_for(observed.wait(), 1)
+                yield b'{"type":"done","response":{"text":"Finished"}}\n'
+        async def handler(request):
+            return httpx.Response(200, stream=Chunks(), headers={"content-type": "application/x-ndjson"})
+        research.client._transport = httpx.MockTransport(handler)
+        def update(text):
+            assert text == "Live 🌍"
+            observed.set()
+        assert await research.fetch("POST", "/chat", {}, on_text=update) == {"text": "Finished"}
+    client.portal.call(run)

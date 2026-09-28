@@ -1,15 +1,20 @@
 {
   "name": "evencomms",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22.18" },
+  "engines": {
+    "node": ">=22.18"
+  },
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "tsc --noEmit && vite build",
     "test": "node --test src/operator/*.test.mjs src/glasses/*.test.mjs",
+    "test:package": "node --test scripts/pack.test.mjs",
+    "test:package:browser": "node scripts/check-package.mjs",
+    "test:pairing:browser": "node scripts/check-pairing.mjs",
     "test:e2e": "playwright test",
-    "pack": "npm run build && node scripts/pack.mjs",
+    "pack": "tsc --noEmit && node scripts/pack.mjs",
     "simulate": "evenhub-simulator http://localhost:5173/glasses.html"
   },
   "dependencies": {

@@ -16,9 +16,9 @@ metadata is not evidence that publication or a live-account test succeeded.
 The Umbrel source package installs an isolated bridge running idle by default.
 Startup **does run synthetic loopback probe processes**, but never signs in to a
 real account or makes real inference requests. Account use requires the operator
-to choose Codex in Research, complete device login, select a model and Send.
+to open Research, complete device login, select a model and Send.
 Standalone `compose.yml` still has no Codex service without `compose.codex.yml`.
-API mode remains the UI default, and existing optional API-key settings are
+Code login is the only Research UI method. Existing backend API-key settings are
 preserved. Wearer conversations, transcription, Ollama and streaming keep their
 existing paths and do not depend on bridge health.
 
@@ -82,7 +82,7 @@ dependencies and binary hashes remain unchanged.
 
 This hotfix adds no directories, networks, ports or resource-limit changes.
 The existing Umbrel bridge stays installed and idle until explicit account use;
-provider choice, device login, model selection and Send remain opt-in. Official
+device login, model selection and Send remain explicit. Official
 Codex `0.157.1` and its binary hashes are unchanged. Update both app and bridge
 images in place, preserving the existing private `codex-auth/token` and app data.
 
@@ -233,8 +233,8 @@ docker compose -f compose.yml -f compose.codex.yml rm -f codex-bridge
 
 ## Operator Steps
 
-1. Open Research and select **ChatGPT account (Experimental Codex)**. Confirm clearing
-   any current local conversation. If the server has not enabled the bridge, the
+1. Open Research. Code login is the only connection method.
+   If the server has not enabled the bridge, the
    UI reports that and leaves sending disabled.
 2. Choose **Get Codex login code**. On HTTP, confirm only if you trust the LAN/VPN.
    Open the displayed `https://auth.openai.com/codex/device` link and enter the
@@ -314,8 +314,7 @@ tokens or account email. The runtime inherits no application password, API key,
 bridge token, proxy variables or personal configuration. Credentials and chats
 are not stored in the application's SQLite database or application logs.
 
-Local browser history/drafts clear on reload, New chat, sign-out or confirmed
-provider change. **Submitted** history and frames also remain in ephemeral bridge
+Local browser history/drafts clear on reload, New chat, sign-out or Disconnect. **Submitted** history and frames also remain in ephemeral bridge
 threads until the runtime is destroyed; clearing the browser view does not erase
 those threads. Each Send creates a fresh thread from exactly the displayed
 history, never hidden prior turns. Bounded RAM caches retain successful results
@@ -336,7 +335,7 @@ mode can permit four concurrent validation workers in the main backend.
 Process termination loses local credentials but does not guarantee successful
 remote token revocation or sign out the user's ChatGPT browser session.
 
-Changing Research provider or closing a tab does not itself revoke the login.
+Closing or changing tabs does not itself revoke the login.
 No continuous stream, microphone audio, stream secret or unsent wearer draft is
 submitted. Research results never automatically go to the glasses.
 

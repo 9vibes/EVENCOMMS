@@ -19,7 +19,7 @@ test('stream tabs, private configuration, playback authorization and cleanup', a
   let sessionsCalls = 0;
   let heldPlayback: Route | undefined;
   let holdPlayback = true;
-  let researchStatus: { configured: boolean; key_source: 'session' | 'server' | null } = { configured: false, key_source: null };
+  let researchStatus = { enabled: true, state: 'disconnected', generation_enabled: false, user_code: null, verification_url: null };
   let researchMode: 'success' | 'error' | 'hold' = 'success';
   let heldResearch: Route | undefined;
   let researchStatusCalls = 0;
@@ -33,20 +33,16 @@ test('stream tabs, private configuration, playback authorization and cleanup', a
   await page.route('**/api/research/**', async route => {
     expect(route.request().headers().authorization).toMatch(/^Bearer /);
     const path = new URL(route.request().url()).pathname;
+    expect(path).toContain('/api/research/codex/');
     if (path.endsWith('/status')) {
       researchStatusCalls++;
       await route.fulfill({ json: researchStatus });
     } else if (path.endsWith('/models')) {
       await route.fulfill(researchModelsFailure ? { status: 502, json: { detail: 'Provider models unavailable' } }
-        : { json: { models: [{ id: 'synthetic-response-model' }, { id: 'synthetic-other-model' }] } });
-    } else if (path.endsWith('/connection')) {
-      if (route.request().method() === 'POST') {
-        expect(route.request().postDataJSON()).toEqual({ api_key: 'synthetic-openai-key' });
-        researchStatus = { configured: true, key_source: 'session' };
-      } else {
-        expect(route.request().method()).toBe('DELETE');
-        researchStatus = { configured: true, key_source: 'server' };
-      }
+        : { json: { models: [{ id: 'synthetic-response-model', image: true }, { id: 'synthetic-other-model', image: true }] } });
+    } else if (path.endsWith('/login')) {
+      expect(route.request().postDataJSON()).toEqual({});
+      researchStatus = { ...researchStatus, state: 'connected', generation_enabled: true };
       await route.fulfill({ json: researchStatus });
     } else if (path.endsWith('/chat')) {
       expect(route.request().method()).toBe('POST');
@@ -122,7 +118,7 @@ test('stream tabs, private configuration, playback authorization and cleanup', a
   await expect(research).toBeFocused();
   await expect(research).toHaveAttribute('aria-selected', 'true');
   await expect(page.getByRole('tabpanel', { name: 'RESEARCH', exact: true })).toBeVisible();
-  await expect(page.getByText('Not configured', { exact: true })).toBeVisible();
+  await expect(page.getByText('ChatGPT disconnected', { exact: true })).toBeVisible();
   await research.press('ArrowLeft');
   await expect(stream).toBeFocused();
   await expect(stream).toHaveAttribute('aria-selected', 'true');
@@ -219,15 +215,13 @@ test('stream tabs, private configuration, playback authorization and cleanup', a
   const researchPanel = page.getByRole('tabpanel', { name: 'RESEARCH', exact: true });
   const researchLog = page.getByRole('log', { name: 'Research conversation' });
   const question = page.getByLabel('Research question', { exact: true });
-  const model = page.getByLabel('OpenAI model', { exact: true });
-  const key = page.getByLabel('OpenAI API key', { exact: true });
-  const send = page.getByRole('button', { name: 'Send to OpenAI', exact: true });
-  await expect(page.getByText('Not configured', { exact: true })).toBeVisible();
+  const model = page.getByLabel('Codex model selector', { exact: true });
+  await expect(page.getByLabel('OpenAI API key', { exact: true })).toHaveCount(0);
+  const send = page.getByRole('button', { name: 'Send via Codex', exact: true });
+  await expect(page.getByText('ChatGPT disconnected', { exact: true })).toBeVisible();
   await question.fill('A text-only research question');
   await expect(send).toBeDisabled();
   await expect.soft(researchPanel.getByRole('button', { name: /Encoder configuration/ })).toHaveCount(0);
-  await key.fill('synthetic-unsent-key');
-  await expect(key).toHaveAttribute('type', 'password');
   await operator.click();
   await expect(page.getByLabel('Your reply', { exact: true })).toHaveValue('Keep this unsent draft');
   const hiddenResearchCalls = researchStatusCalls;
@@ -235,14 +229,11 @@ test('stream tabs, private configuration, playback authorization and cleanup', a
   expect(researchStatusCalls).toBe(hiddenResearchCalls);
   await research.click();
   await expect(question).toHaveValue('A text-only research question');
-  await expect(key).toHaveValue('');
-  await key.fill('synthetic-openai-key');
-  await page.getByRole('button', { name: 'Connect for this sign-in', exact: true }).click();
-  await expect(page.getByText('Connected / models validated / current sign-in key', { exact: true })).toBeVisible();
-  await expect(key).toHaveValue('');
+  await page.getByRole('button', { name: 'Get Codex login code', exact: true }).click();
+  await expect(page.getByText('ChatGPT connected', { exact: true })).toBeVisible();
   await expect(model).toHaveValue('');
   await expect(send).toBeDisabled();
-  await expect(model.locator('option')).toHaveText(['Select an available model', 'synthetic-response-model', 'synthetic-other-model']);
+  await expect(model.locator('option')).toHaveText(['Select a Codex model', 'synthetic-response-model / images supported', 'synthetic-other-model / images supported']);
   await model.selectOption('synthetic-response-model');
   for (const width of [1440, 390, 320]) {
     await page.setViewportSize({ width, height: 1000 });
@@ -264,12 +255,11 @@ test('stream tabs, private configuration, playback authorization and cleanup', a
     model: 'synthetic-response-model', messages: [{ role: 'user', text: 'A text-only research question', images: [] }],
   });
   researchMode = 'hold';
-  page.once('dialog', async dialog => { expect(dialog.message()).toContain('may bill again'); await dialog.accept(); });
+  page.once('dialog', async dialog => { expect(dialog.message()).toContain('may consume more plan allowance'); await dialog.accept(); });
   await send.click();
   await expect.poll(() => researchRequests.length).toBe(2);
   expect(researchRequests[1]).toEqual(researchRequests[0]);
   await expect(model).toBeDisabled();
-  await expect(key).toBeDisabled();
   await expect(question).toHaveAttribute('readonly', '');
   await operator.click();
   await researchReply(heldResearch!);
@@ -293,26 +283,23 @@ test('stream tabs, private configuration, playback authorization and cleanup', a
   expect(persisted).not.toContain('synthetic-openai-key');
   expect(persisted).not.toContain('synthetic-response-model');
   expect(persisted).not.toContain('text-only research');
-  await page.getByRole('button', { name: 'Remove sign-in key', exact: true }).click();
-  await expect(page.getByText('Connected / models validated / server-managed key', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Remove sign-in key', exact: true })).toHaveCount(0);
   researchModelsFailure = true;
-  await page.getByRole('button', { name: 'Refresh models', exact: true }).click();
-  await expect(page.getByText('Configured / models not validated / server-managed key', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Refresh Codex connection', exact: true }).click();
   await expect(page.getByText('Provider models unavailable', { exact: true })).toBeVisible();
-  await expect(model).toHaveValue('synthetic-response-model');
+  await expect(model).toHaveValue('');
   await expect(send).toBeDisabled();
   researchModelsFailure = false;
-  await page.getByRole('button', { name: 'Refresh models', exact: true }).click();
-  await expect(page.getByText('Connected / models validated / server-managed key', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Refresh Codex connection', exact: true }).click();
+  await expect(model).toBeEnabled();
+  await model.selectOption('synthetic-response-model');
   researchMode = 'hold';
   await question.fill('Discard this pending question');
   await send.click();
   await expect.poll(() => researchRequests.length).toBe(4);
-  page.once('dialog', async dialog => { expect(dialog.message()).toContain('may still process and bill'); await dialog.dismiss(); });
+  page.once('dialog', async dialog => { expect(dialog.message()).toContain('may still process the request and consume plan allowance'); await dialog.dismiss(); });
   await page.getByRole('button', { name: 'New chat', exact: true }).click();
   await expect(question).toHaveValue('Discard this pending question');
-  page.once('dialog', async dialog => { expect(dialog.message()).toContain('may still process and bill'); await dialog.accept(); });
+  page.once('dialog', async dialog => { expect(dialog.message()).toContain('may still process the request and consume plan allowance'); await dialog.accept(); });
   await page.getByRole('button', { name: 'New chat', exact: true }).click();
   await researchReply(heldResearch!).catch(() => {}); // Browser waiting was intentionally aborted.
   await expect(researchLog.locator('li')).toHaveCount(0);

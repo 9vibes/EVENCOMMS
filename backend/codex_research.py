@@ -12,6 +12,7 @@ import httpx
 from fastapi import Depends, HTTPException, Request
 from pydantic import ValidationError
 
+from .reply_stream import stream_reply
 from .research import MODEL_ID, MODEL_TTL, PROVIDER_LIMIT, RESULT_TTL, TEXT_LIMIT, Input, Research, digest
 
 
@@ -267,13 +268,14 @@ class CodexResearch:
         await self.client.aclose()
         await self.lifecycle_client.aclose()
 
-    async def fetch(self, method, path, payload=None, *, lifecycle=False):
+    async def fetch(self, method, path, payload=None, *, lifecycle=False, on_text=None):
         client = self.lifecycle_client if lifecycle else self.client
         try:
             async with client.stream(
                 method, self.config.codex_bridge_url + path, json=payload,
                 headers={"Authorization": "Bearer " + self.config.codex_bridge_token,
-                         "Accept-Encoding": "identity"}, follow_redirects=False,
+                         "Accept-Encoding": "identity",
+                         "Accept": "application/x-ndjson" if on_text else "application/json"}, follow_redirects=False,
             ) as response:
                 status = response.status_code
                 allowed = {204} if method == "DELETE" else {200}
@@ -301,6 +303,56 @@ class CodexResearch:
                     raise ValueError()
                 size = response.headers.get("content-length")
                 if size is not None and not 0 <= int(size) <= PROVIDER_LIMIT:
+                    raise ValueError()
+                if on_text and response.headers.get("content-type", "").split(";")[0] == "application/x-ndjson":
+                    buffer = bytearray()
+                    count = 0
+                    async for chunk in response.aiter_bytes():
+                        buffer.extend(chunk)
+                        while b"\n" in buffer:
+                            line, _, remainder = buffer.partition(b"\n")
+                            buffer = bytearray(remainder)
+                            if len(line) > 200000:
+                                raise ValueError()
+                            if not line:
+                                continue
+                            count += 1
+                            if count > 4098:
+                                raise ValueError()
+                            event = json.loads(line)
+                            if not isinstance(event, dict):
+                                raise ValueError()
+                            if event.get("type") == "text":
+                                text = event.get("text")
+                                if not isinstance(text, str) or len(text) > 16000:
+                                    raise ValueError()
+                                text.encode("utf-8")
+                                on_text(text)
+                            elif event.get("type") == "done":
+                                result = event.get("response")
+                                if not isinstance(result, dict):
+                                    raise ValueError()
+                                return result
+                            elif event.get("type") == "error":
+                                code = event.get("code")
+                                failure = BRIDGE_ERRORS.get(code) if isinstance(code, str) else None
+                                if failure:
+                                    raise HTTPException(failure[0], failure[1] + f" [codex:{code}]" + RETRY_WARNING)
+                                status = event.get("status")
+                                labels = {
+                                    409: "Codex is not ready; check the account connection.",
+                                    422: "Codex rejected the request; check the selected model and input.",
+                                    429: "Codex is busy or its usage limit was reached.",
+                                    503: "Codex bridge is unavailable.",
+                                    504: "Codex request timed out.",
+                                }
+                                if type(status) is int and status in labels:
+                                    raise HTTPException(status, labels[status] + RETRY_WARNING)
+                                raise HTTPException(502, "Codex response failed before completion." + RETRY_WARNING)
+                            else:
+                                raise ValueError()
+                        if len(buffer) > 200000:
+                            raise ValueError()
                     raise ValueError()
                 raw = bytearray()
                 async for chunk in response.aiter_bytes():
@@ -468,7 +520,7 @@ class CodexResearch:
 
         return await self.run(parent, session, None, None, work)
 
-    async def chat(self, parent, session, data):
+    async def chat(self, parent, session, data, on_text=None):
         self.check(parent, session)
         identity = str(data.request_id)
         fingerprint = digest(session.identity + data.model_dump_json())
@@ -488,7 +540,8 @@ class CodexResearch:
                 raise HTTPException(422, "Select a model from the available Codex model list")
             if not selected["image"] and any(message.images for message in data.messages):
                 raise HTTPException(422, "The selected Codex model does not support images")
-            response = await self.fetch("POST", f"/sessions/{session.identity}/chat", data.model_dump(mode="json"))
+            response = await self.fetch("POST", f"/sessions/{session.identity}/chat", data.model_dump(mode="json"),
+                                      **({"on_text": update} if on_text else {}))
             self.check(parent, session)
             try:
                 text, incomplete, usage = (response[name] for name in ("text", "incomplete", "usage"))
@@ -507,6 +560,10 @@ class CodexResearch:
                         "incomplete": incomplete or len(text) > 16000, "usage": usage}
             except (ValueError, KeyError, TypeError):
                 raise HTTPException(502, "Invalid or empty Codex response." + RETRY_WARNING) from None
+
+        def update(text):
+            self.check(parent, session)
+            on_text(text)
 
         return await self.run(parent, session, identity, fingerprint, work, cache=True)
 
@@ -559,10 +616,19 @@ def register_codex_research_routes(app, operator, bearer, digest, body):
         # Hold admission across validation and dedup waiting, even if the session
         # is replaced. Worker/provider slots separately survive waiter cancellation.
         research.chat_waiters[parent] = research.chat_waiters.get(parent, 0) + 1
-        try:
-            data = await research.validate_chat(parent, session, request, body)
-            return await research.chat(parent, session, data)
-        finally:
+        def release():
             research.chat_waiters[parent] -= 1
             if not research.chat_waiters[parent]:
                 del research.chat_waiters[parent]
+
+        streaming = False
+        try:
+            data = await research.validate_chat(parent, session, request, body)
+            if "application/x-ndjson" in request.headers.get("accept", ""):
+                response = stream_reply(lambda update: research.chat(parent, session, data, update), release)
+                streaming = True
+                return response
+            return await research.chat(parent, session, data)
+        finally:
+            if not streaming:
+                release()

@@ -3,96 +3,28 @@ id: kunas-evencomms
 name: EVENCOMMS
 tagline: Local conversations between Even glasses and an operator
 category: social
-version: "0.4.4"
+version: "0.4.5"
 port: 28097
 description: >-
-  SOURCE STAGING PACKAGE. The 0.4.4 Codex response compatibility update uses local source builds of
-  evencomms:0.4.4 and evencomms-codex:0.4.4; use KNS-Umbrel for the
-  digest-pinned installable release package and check actual release results.
-  Pair an Even Hub client with a
-  browser operator, transcribe short English utterances locally on CPU,
-  and optionally draft replies with an existing local Ollama server.
-  AI replies require operator approval. A reachable HTTPS origin and
-  explicit origin configuration are required for phone deployment.
-  An operator STREAM tab previews one authenticated RTMP feed over Low-Latency
-  HLS with 200 ms parts and a one-second browser live-sync target, not a latency
-  guarantee. Digital zoom/pan is 1x to 4x, not camera PTZ. No recording or
-  transcoding. Plaintext RTMP is for trusted LAN/VPN use only.
-  RESEARCH defaults to the optional OpenAI API key connection, with account-provided
-  model IDs; availability does not guarantee Responses or vision compatibility. Connect a
-  sign-in-only key in the HTTPS UI or use a private shared server environment,
-  never a plain manifest key field. Explicit Send submits displayed chat history
-  and selected video-pixel JPEG stills, not continuous video/audio or UI controls.
-  No automatic wearer replies or web-search tools. OpenAI API use is billable;
-  store: false is not a zero-retention guarantee. Nonsecret defaults are
-  OPENAI_TIMEOUT=90 seconds and OPENAI_MAX_OUTPUT_TOKENS=2048.
-  Experimental Codex is an alternative ChatGPT account connection, not unlimited
-  API access. Its isolated service starts idle by default and runs synthetic
-  loopback safety probes, not a real account login or inference. Account use
-  requires choosing Codex, device sign-in, an explicit model and Send. An eligible
-  plan is required; model entitlement is not guaranteed. ChatGPT allowance,
-  workspace policies and data controls apply. No automatic API, provider or model
-  fallback. Two signed-in operators and eight sends per login bound RAM use.
-  A private service token is provisioned automatically, separately from the app
-  password; OAuth credentials are not persisted. Prefer manually configured TLS
-  for private conversations. HTTP device-code login requires a trusted-network
-  confirmation; console traffic remains unencrypted. Enter the issued code only
-  on OpenAI's HTTPS page. API-key entry still requires HTTPS or exact loopback.
-  Codex adds no public ports and its health
-  does not gate ordinary app startup.
+  SOURCE STAGING PACKAGE. Use KNS-Umbrel for the verified, digest-pinned release.
+  EVENCOMMS connects an Even Hub companion with a browser operator for local
+  speech transcription and human-approved replies. STREAM provides authenticated
+  low-latency HLS monitoring with digital zoom and still-frame capture.
+  RESEARCH uses ChatGPT code login and displays responses as they are generated.
+  An eligible ChatGPT plan is required; account usage limits and data controls apply.
+  Only explicit Send submits Research history and selected stills. No continuous
+  video/audio or automatic replies to glasses. There is no paid API fallback.
+  OAuth credentials remain in isolated bridge memory until disconnect or expiry.
+  Use trusted networking and HTTPS for private conversations and phone deployment.
 developer: EVENCOMMS contributors
 dependencies: []
 defaultUsername: ""
 deterministicPassword: true
 releaseNotes: >-
-  0.4.4 fixes Codex replies when the upstream omits Content-Type. The native
-  SSE parser and completed-turn checks still validate the response; explicitly
-  incompatible content types, tools and model changes remain rejected.
-
-  0.4.3 adds opt-in ALLOW_EVEN_LOCALHOST support for the installed Even app
-  HTTP loopback origin, covering CORS and wearer WebSockets across port changes.
-  Pairing and bearer authentication remain required.
-
-  0.4.2 fixes reply compatibility and adds safe diagnostics for experimental Codex
-  Research introduced in 0.4.0. Preserves native Responses Lite, reasoning summary
-  none and the truthful Codex 0.157.1 upstream version header; the prior sanitized
-  catalog unintentionally changed the native wire protocol. Valid scoped metadata
-  and streaming deltas are accepted, but tools, approvals, unknown events and model
-  changes remain blocked. Fixed diagnostics such as [codex:rate_limit] replace
-  generic failures without exposing provider bodies, native logs, account details
-  or secrets. Native account/read checks workspace routing before every upstream
-  attempt, including after credential refresh. Unsupported regional routing fails
-  closed with no arbitrary backend fallback. Removes the hidden 15-second relay
-  read cutoff while retaining the 85-second end-to-end generation budget.
-  A synthetic reproduction showed valid replies rejected by the old Generation
-  handler succeeding with the fix; it does not prove the exact cause on a user's
-  host or establish real OpenAI account verification.
-  Retains the 0.4.1 device-login fixes and unchanged API-key HTTPS guard.
-  Get Codex login code is available on the default HTTP Umbrel console after an
-  explicit trusted-network confirmation. This is Codex-only; API-key entry still
-  requires HTTPS or exact localhost/loopback, and console HTTP remains unencrypted.
-  Enter the actual issued code only on OpenAI's HTTPS device page. Codes, including
-  nine-digit codes, are displayed unchanged, never fabricated or restricted to
-  exactly nine digits. Independent 10-second binary verification preserves login
-  readiness if the 75-second generation proof fails or times out; generation still
-  requires the complete safety proof. Overlapping heartbeat acknowledgements no
-  longer cancel unacknowledged logins or lose their cleanup obligations.
-  Official Codex 0.157.1 and its binary hashes are unchanged. The existing bridge
-  stays installed and idle, with account use opt-in. No new directories, networks,
-  ports or resource-limit changes. API mode remains the UI default; existing
-  optional OpenAI keys and settings remain unchanged. Rebuild/redeploy the full
-  stack, including both 0.4.4 images, without retagging 0.4.0 or 0.4.1. Initialization installs
-  bundled nginx and MediaMTX configs and preserves the existing private token. Back up
-  codex-auth alongside app data, never account tokens. Update in place, preserving
-  app ID, web port 28097, RTMP port 21936, password, user data, model cache and stream secrets.
-  API sign-in keys are server-RAM-only and clear on logout, expiry, explicit
-  Research disconnect or restart. Browser chat clears on reload, sign-out or
-  New chat; submitted Codex history/frames remain in ephemeral bridge threads
-  until runtime cleanup. OAuth credentials are RAM-only and lost on restart.
-  Wearer voice and human-approved replies are unchanged.
-  Retains 0.3.0 Research captures, digital zoom/pan and LL-HLS. Use the canonical
-  KNS-Umbrel package for a published, digest-pinned installation after image verification.
-  This manifest does not establish successful CI or publication. Tests use
-  MockTransport/browser stubs and synthetic Codex probes, not live account verification.
-  Native Safari LL-HLS, physical glasses/phones and target-host acceptance remain
-  unverified; prefer TLS for private console traffic and require it for phone deployment.
+  0.4.5 adds live streaming Research replies and code-login-only controls.
+  Removes the unused wearer-client link and simplifies Research settings.
+  The last operator reply preview now matches the companion's green-on-black
+  glasses display. Interrupted replies preserve the question and attached frames;
+  only completed replies are saved in the local chat history.
+  Updates the server and Codex bridge together. Preserves app ID, ports, password,
+  database, model cache and private service token. Reconnect ChatGPT after updating.

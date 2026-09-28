@@ -158,12 +158,7 @@ body:has(> #root > .operator-app) { margin: 0; }
 .operator-app .op-preview-heading { display: flex; justify-content: space-between; align-items: center; gap: 9px; margin-bottom: 10px; }
 .operator-app .op-preview-heading h2 { font-size: 11px; font-weight: 500; }
 .operator-app .op-preview-heading .op-eyebrow { font-size: 7px; color: var(--op-muted); }
-.operator-app .op-preview-screen { position: relative; padding: 29px 19px 31px; min-height: 128px; border-radius: 8px; color: var(--op-ink); background-color: var(--comms-deep); background-image: linear-gradient(#30362e25 1px, transparent 1px), linear-gradient(90deg, #30362e25 1px, transparent 1px); background-size: 32px 32px; border: 1px solid var(--op-line); }
-.operator-app .op-preview-screen > p { font: 11px/1.8 var(--op-mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 158px; overflow-y: auto; scrollbar-color: var(--comms-control-line) var(--op-paper); }
-.operator-app .op-preview-screen > .op-preview-empty { color: var(--op-muted); }
-.operator-app .op-preview-corner { position: absolute; top: 11px; left: 11px; height: 8px; width: 8px; border-left: 1px solid var(--comms-control-hover); border-top: 1px solid var(--comms-control-hover); }
-.operator-app .op-preview-bottom { display: flex; justify-content: space-between; position: absolute; bottom: 9px; left: 18px; right: 18px; color: var(--op-muted); font: 6px var(--op-mono); letter-spacing: .1em; }
-.operator-app .op-fine-print { color: var(--op-muted); font-size: 10px; line-height: 1.6; }
+.operator-app .op-preview-pages { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 8px; }
 .operator-app .op-preview > .op-fine-print { margin-top: 10px; font-size: 9px; }
 .operator-app .op-service .op-panel-heading { padding: 14px 16px; }
 .operator-app .op-service .op-panel-heading h2 { font-size: 12px; }
@@ -245,7 +240,6 @@ body:has(> #root > .operator-app) { margin: 0; }
   .operator-app .op-rail { grid-column: auto; grid-template-columns: 1fr 1fr; }
   .operator-app .op-service { grid-column: 2; grid-row: 1; }
   .operator-app .op-preview { grid-column: 1 / -1; }
-  .operator-app .op-preview-screen { min-height: 135px; }
   .operator-app .op-pair-code > strong { font-size: 28px; }
   .operator-app .op-footer { padding: 18px 20px; flex-wrap: wrap; font-size: 7px; }
   .operator-app .op-footer > span:nth-child(2) { display: none; }

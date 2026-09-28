@@ -38,9 +38,9 @@ automatic API, provider or model fallback and no model-entitlement guarantee.
 The Umbrel source package installs its isolated service by default,
 automatically provisioning a private service token. Startup runs synthetic
 loopback safety probes, not real account login or inference. Account use requires
-explicit Research provider selection, device sign-in, model selection and Send.
+device sign-in, model selection and Send.
 This hotfix retains the `0.4.0` directories, networks and resource limits.
-The UI still defaults to API mode; existing optional OpenAI keys are unchanged.
+Research now uses code login only; the API-key form and provider selector are removed.
 Standalone `compose.yml` has no Codex service unless you add `compose.codex.yml`.
 See [Codex setup, allowance and privacy](docs/codex.md).
 
@@ -59,38 +59,17 @@ is installed automatically by the image's init service. See the
 
 ## Operator And Wearer Interaction
 
-### Research API Mode
+### Research Code Login
 
-The **RESEARCH** tab beside STREAM provides an OpenAI chat, an available-model
-selector, and a live preview with **Capture frame**. A capture includes video
-pixels at the current zoom/pan, not page controls, and stays in the draft until
-you explicitly choose **Send to OpenAI**. Text-only questions work without a feed.
+The **RESEARCH** tab provides ChatGPT account sign-in, a model selector, and a
+live preview with **Capture frame**. Choose **Get Codex login code**, enter that
+code on OpenAI's HTTPS sign-in page, then select a model and **Send via Codex**.
+There is no API-key login option or provider switch in this tab. Captured stills
+remain in the draft until Send; text-only questions work without a stream.
+Research never automatically replies to the glasses.
 
-Connect your own OpenAI API key for the current sign-in over HTTPS/localhost,
-or configure `OPENAI_API_KEY` on the server. Keys entered in the UI stay only in
-server memory for that operator session. Available model IDs come from OpenAI;
-choose a Responses/vision-compatible model rather than assuming every ID supports
-images. OpenAI API billing and retention rules apply, separately from ChatGPT.
-
-Research chat/images remain in browser memory and clear on reload, logout or New chat.
-No frames, microphone audio, stream keys or wearer messages are sent automatically.
-Send includes the displayed history and its attached stills; no live feed is sent
-to OpenAI and no web-search tools are enabled. Requests use `store: false`, not a
-zero-retention guarantee. Provider testing uses MockTransport and browser stubs,
-not live OpenAI calls. See
-[Research setup and privacy](docs/research.md).
-
-### Experimental Codex Mode
-
-Choose **ChatGPT account (Experimental Codex)** in Research, then **Get Codex login
-code**. Enter that one-time code on OpenAI's HTTPS device page, just as with
-`codex login --device-auth`; never paste account passwords, cookies or OAuth
-tokens into EVENCOMMS. HTTPS is recommended for the console. The HTTP Umbrel
-console can request a code after an explicit trusted-network confirmation, but
-its operator session and code remain exposed on that connection. API-key entry
-still requires HTTPS or exact localhost/loopback access.
-Choose a pinned model explicitly and use **Send via Codex** to submit displayed
-history and selected stills. Signing in and choosing a model do not submit them.
+The HTTP Umbrel console retains its trusted-network confirmation for requesting
+a code. See [Codex setup and privacy](docs/codex.md) for deployment requirements.
 
 An eligible plan/workspace is required, and plan limits, purchased credits and
 account/workspace data controls apply. This is not unlimited API access or the
@@ -279,14 +258,36 @@ and its development QR to load the phone-reachable URL, not a localhost URL
 that points back at the phone. The browser simulation entry point is
 `/glasses.html?simulate=1`; do not use simulation mode to test glasses hardware.
 
-For packaging from `frontend`, the frontend pack script uses the externally
-reachable HTTPS backend origin:
+For packaging from `frontend`, use the canonical pack script with the externally
+reachable HTTPS backend origin. It type-checks and builds a fresh companion-only
+payload, rather than packing the operator's web distribution:
 
 ```sh
 npm ci
-npm run build
 EVENCOMMS_ORIGIN=https://comms.example.net npm run pack
 ```
+
+The package declares `index.html` as its entrypoint. Both that default page and
+the legacy `glasses.html` alias contain the wearer UI; operator HTML and
+operator-only asset dependencies are not bundled. The normal web build still
+serves the operator at `/` and the companion at `/glasses.html`.
+Do not bypass the script with `evenhub pack app.json dist`: web `dist/index.html`
+is intentionally the operator portal.
+
+The default output is `frontend/evencomms.ehpk`. Existing outputs are never
+overwritten. Use `--output` for a new destination and, when replacing a cached
+private client build, `--package-version X.Y.Z` for a distinct client-only version:
+
+```sh
+EVENCOMMS_ORIGIN=https://comms.example.net npm run pack -- --package-version 0.4.3 --output evencomms-companion-0.4.3.ehpk
+```
+
+That override does not change repository/server versions or deploy the backend.
+Package checks are `npm run build && npm run test:package`,
+`npm run test:package:browser` and `npm run test:pairing:browser` with Playwright
+Chromium installed. The browser checks serve staging separately, including a
+nested private-build prefix, and check default-entry/navigation, actual CORS
+preflights, opaque origins and blocked storage without a physical device.
 
 The generated Even package must explicitly whitelist that HTTPS backend origin
 in its network permissions (and the corresponding WebSocket destination if
@@ -298,6 +299,23 @@ cross-origin HTTP and WebSocket requests. Do not guess that origin from the
 backend URL: inspect the SDK/development client's Origin or packaging output.
 The frontend and pack script must be present in the complete source checkout;
 deployment files alone do not provide them.
+
+The private package embeds its public backend origin so bootstrapping does not
+depend on fetching local `stone.json` inside the installed WebView. If prototype
+mode works but the private build reports a connection failure, open **Connection
+details** in that private build and select **Check connection**. The diagnostic
+shows `location.origin`, the browser-effective `window.origin`, the scheme and
+validated Stone/pair endpoint, not the full page URL, pairing code or credentials.
+An opaque effective origin is displayed as `null`; do not replace it with an
+inferred hostname, add `null` to the allowlist or enable wildcard CORS.
+
+The check sends a credential-free JSON-header `GET /health`; pairing runs the
+same check before its one-use code is sent. A failed check does not consume the
+code, but a passed check does not prove pairing POST or WebSocket access. A
+failure after the POST can leave code consumption uncertain; request a new code
+before retrying. If browser storage is blocked, successful pairing stays usable
+in memory with an explicit warning. Keep the page open: pairing and draft
+recovery after a reload are not guaranteed.
 
 ## Configuration
 

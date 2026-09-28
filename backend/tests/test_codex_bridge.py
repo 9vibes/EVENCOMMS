@@ -1960,3 +1960,27 @@ def test_relay_caps_connections_before_creating_handler_tasks():
         assert not relay.tasks
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("mode", ["text", "error"])
+def test_chat_stream_envelope_and_cached_replay(bridge_client, mode):
+    client = bridge_client
+    runtime = connect(client)
+    runtime.mode = mode
+    data = chat()
+    response = client.post(BASE + "/chat", json=data, headers={"Accept": "application/x-ndjson"})
+    assert response.status_code == 200
+    assert response.headers["x-accel-buffering"] == "no"
+    events = [json.loads(line) for line in response.text.splitlines() if line]
+    if mode == "text":
+        assert events[-1]["type"] == "done"
+        assert events[-1]["response"]["text"] == "Answer"
+        assert events[0] == {"type": "text", "text": "Answer"}
+        count = len(runtime.calls)
+        replay = client.post(BASE + "/chat", json=data, headers={"Accept": "application/x-ndjson"})
+        assert json.loads(replay.text.strip())["type"] == "done"
+        assert len(runtime.calls) == count
+    else:
+        assert events[-1]["type"] == "error"
+        assert "secret-provider-error" not in response.text
+    assert not client.app.state.bridge.stream_bodies

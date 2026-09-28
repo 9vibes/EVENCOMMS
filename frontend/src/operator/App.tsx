@@ -4,6 +4,7 @@ import { ApiError, characterCount, clientId, errorText, mergeMessages, request }
 import type { Message, ServiceStatus, Session } from './api';
 import StreamTab from './StreamTab';
 import ResearchTab from './ResearchTab';
+import ReplyPreview from './ReplyPreview';
 
 const TOKEN_KEY = 'evencomms.operator.token';
 const POLL_INTERVAL = 2000;
@@ -855,7 +856,7 @@ function Console({ token, onLogout }: { token: string; onLogout: (expired?: bool
                 <span className="op-eyebrow">DEVICE CONNECTION</span>
               </div>
               <h2 id="pairing-title">Make the connection.</h2>
-              <p>Open the wearer client on your device and enter a single-use pairing code.</p>
+              <p>Open EVENCOMMS in the Even Hub app on your phone and enter a single-use pairing code.</p>
               {pairing && secondsLeft > 0 ? (
                 <div className="op-pair-code">
                   <span className="op-eyebrow">SINGLE-USE CODE</span>
@@ -888,13 +889,6 @@ function Console({ token, onLogout }: { token: string; onLogout: (expired?: bool
                     ? 'Generate another code'
                     : 'Generate pairing code'}
               </button>
-              <a className="op-rail-link" href="/glasses.html" target="_blank" rel="noopener noreferrer">
-                Open wearer client{' '}
-                <span aria-hidden="true">
-                  <Icon name="arrow" />
-                </span>
-                <span className="op-sr-only"> (new tab)</span>
-              </a>
               <a
                 className="op-rail-link op-secondary-link"
                 href="/glasses.html?simulate=1"
@@ -913,21 +907,7 @@ function Console({ token, onLogout }: { token: string; onLogout: (expired?: bool
                 <h2 id="preview-title">Last operator reply</h2>
                 <span className="op-eyebrow">TEXT PREVIEW</span>
               </div>
-              <div className="op-preview-screen">
-                <span className="op-preview-corner" aria-hidden="true" />
-                {latestReply ? (
-                  <p>{latestReply.text}</p>
-                ) : (
-                  <p className="op-preview-empty">
-                    {selected
-                      ? 'Your next reply,\nwith nothing in the way.'
-                      : 'A little context.\nRight in sight.'}
-                  </p>
-                )}
-                <span className="op-preview-bottom" aria-hidden="true">
-                  EVENCOMMS <span>...</span>
-                </span>
-              </div>
+              <ReplyPreview key={`${selectedId ?? 'none'}:${latestReply?.id ?? 'empty'}`} text={latestReply?.text ?? ''} />
               <p className="op-fine-print">
                 {latestReply
                   ? 'Last accepted reply, not a live device view or delivery receipt.'

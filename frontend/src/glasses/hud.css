@@ -1,0 +1,7 @@
+/* Matches the installed 0.4.6 companion display preview. */
+.glasses-preview { container-type: inline-size; color: #83dfa3; background: #030705; border: 1px solid #20432d; border-radius: 12px; overflow: hidden; box-shadow: inset 0 0 22px #39764a18; }
+.hud-screen { position: relative; aspect-ratio: 2 / 1; padding: 3cqw; display: flex; flex-direction: column; font-family: 'Open Sans', sans-serif; font-size: 3.65cqw; font-weight: 300; line-height: 1.3; text-shadow: 0 0 3px #8cffab30; }
+.hud-screen::after { content: ''; position: absolute; inset: 0; pointer-events: none; background: repeating-linear-gradient(0deg, transparent 0 2px, #00000030 2px 3px); }
+.hud-header { display: flex; justify-content: space-between; gap: 2cqw; padding-bottom: 1.7cqw; border-bottom: 1px solid #55996b; }
+.hud-body { flex: 1; padding: 2.2cqw 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.hud-footer { display: flex; justify-content: space-between; gap: 2cqw; border-top: 1px solid #55996b; padding-top: 1.7cqw; font-size: 2.5cqw; color: #6aba88; }

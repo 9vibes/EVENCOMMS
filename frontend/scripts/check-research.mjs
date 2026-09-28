@@ -32,7 +32,7 @@ async function check() {
     baseURL: base.origin, viewport: { width: 1440, height: 1000 }, serviceWorkers: 'block',
   });
   context.setDefaultTimeout(8000);
-  const fakeKey = 'synthetic-research-smoke-not-a-provider-key';
+  const fakeKey = 'SYNTHETIC-DEVICE-CODE';
   const models = ['synthetic-smoke-vision-a', 'synthetic-smoke-vision-b'];
   const reply = 'Synthetic reply only: <img src="https://synthetic.invalid/pixel"> **not HTML**';
   const chats = [];
@@ -52,24 +52,23 @@ async function check() {
     const method = request.method();
     const body = request.postData() ?? '';
     if (url.origin !== base.origin || url.username || url.password
-        || ((url.href + JSON.stringify(request.headers()) + body).includes(fakeKey)
-          && !(path === '/api/research/connection' && method === 'POST'))) {
+        || (url.href + JSON.stringify(request.headers()) + body).includes(fakeKey)) {
       violation = true;
       return route.abort();
     }
     if (path.startsWith('/api/research/')) {
       let response;
-      if (path === '/api/research/status' && method === 'GET') {
-        response = { configured: connected, key_source: connected ? 'session' : null };
-      } else if (path === '/api/research/connection' && method === 'POST') {
-        if (body !== JSON.stringify({ api_key: fakeKey })) violation = true;
+      if (path === '/api/research/codex/status' && method === 'GET') {
+        response = { enabled: true, state: connected ? 'connected' : 'disconnected', generation_enabled: connected, verification_url: null, user_code: null };
+      } else if (path === '/api/research/codex/login' && method === 'POST') {
+        if (body !== '{}') violation = true;
         connected = true;
         connections++;
-        response = { configured: true, key_source: 'session' };
-      } else if (path === '/api/research/models' && method === 'GET' && connected) {
+        response = { enabled: true, state: 'connected', generation_enabled: true, verification_url: null, user_code: null };
+      } else if (path === '/api/research/codex/models' && method === 'GET' && connected) {
         modelCalls++;
-        response = { models: models.map(id => ({ id })) };
-      } else if (path === '/api/research/chat' && method === 'POST' && connected) {
+        response = { models: models.map(id => ({ id, image: true })) };
+      } else if (path === '/api/research/codex/chat' && method === 'POST' && connected) {
         try {
           const chat = JSON.parse(body);
           chats.push(chat);
@@ -131,9 +130,9 @@ async function check() {
   const panel = page.getByRole('tabpanel', { name: 'RESEARCH', exact: true });
   const log = page.getByRole('log', { name: 'Research conversation', exact: true });
   const question = page.getByRole('textbox', { name: 'Research question', exact: true });
-  const key = page.getByLabel('OpenAI API key', { exact: true });
-  const model = page.getByLabel('OpenAI model', { exact: true });
-  const send = page.getByRole('button', { name: 'Send to OpenAI', exact: true });
+  await expect(page.getByLabel('OpenAI API key', { exact: true })).toHaveCount(0);
+  const model = page.getByLabel('Codex model selector', { exact: true });
+  const send = page.getByRole('button', { name: 'Send via Codex', exact: true });
   const capture = page.getByRole('button', { name: 'Capture frame', exact: true });
   const drafts = page.getByRole('img', { name: /^Draft frame \d+$/ });
   const draft = number => page.getByRole('img', { name: `Draft frame ${number}`, exact: true });
@@ -207,14 +206,13 @@ async function check() {
     await storageSafe();
   }
 
-  stage = 'local decoded JPEG captures before connecting a key';
+  stage = 'local decoded JPEG captures before code login';
   await playing();
   stage = 'disconnected Research controls and compact preview';
   expect(mediaResponses).toBeGreaterThan(0);
-  await expect(page.getByText('Not configured', { exact: true })).toBeVisible();
+  await expect(page.getByText('ChatGPT disconnected', { exact: true })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Encoder configuration', exact: true })).toHaveCount(0);
   await expect(model).toHaveValue('');
-  await expect(key).toHaveValue('');
   const video = await page.locator('video').elementHandle();
   const before = await video.evaluate(video => ({ src: video.currentSrc, time: video.currentTime }));
   stage = 'full-frame native JPEG thumbnail and dimensions';
@@ -268,10 +266,8 @@ async function check() {
   await page.setViewportSize({ width: 1440, height: 1000 });
 
   stage = 'synthetic connection, explicit model selection and JPEG-only chat wire';
-  await key.fill(fakeKey);
   await storageSafe();
-  await page.getByRole('button', { name: 'Connect for this sign-in', exact: true }).click();
-  await expect(key).toHaveValue('');
+  await page.getByRole('button', { name: 'Get Codex login code', exact: true }).click();
   await expect(model.locator('option')).toHaveCount(3);
   await expect(model).toHaveValue('');
   await expect(send).toBeDisabled();
@@ -310,8 +306,7 @@ async function check() {
   expect(chats[1].messages.at(-1).images).toEqual([followup.src]);
   await expect(log.getByRole('img', { name: 'Sent frame', exact: true })).toHaveCount(3);
   if (screenshot) {
-    stage = 'private synthetic screenshot with blank key and no encoder settings';
-    await expect(key).toHaveValue('');
+    stage = 'private synthetic screenshot with code login and no encoder settings';
     expect(settingsCalls).toBe(0);
     await expect(panel.getByText('Encoder configuration', { exact: true })).toHaveCount(0);
     await panel.screenshot({ path: screenshot });

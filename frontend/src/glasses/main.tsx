@@ -2,30 +2,28 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { createRoot } from 'react-dom/client'
 import { WearerRuntime, type WearerState } from './runtime.ts'
 import type { SavedDraft } from './draft.ts'
+import { checkConnection, ConnectionError, connectionDetails, pairingCredentials, pairWithPrecheck, validateOrigin } from './connection.ts'
 import './wearer.css'
 
+declare const __EVENCOMMS_PACKAGED_ORIGIN__: string
+const packagedOrigin = typeof __EVENCOMMS_PACKAGED_ORIGIN__ === 'undefined' ? undefined : __EVENCOMMS_PACKAGED_ORIGIN__
 const simulated = new URLSearchParams(location.search).get('simulate') === '1'
 type Pairing = { token: string; session_id: string; name: string; draft: SavedDraft }
 const emptyDraft: SavedDraft = { text: '', pending: null }
 
-function validateOrigin(value: string) {
-  const url = new URL(value)
-  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
-    throw new Error('Enter a full server origin without a path, e.g. https://stone.example.net')
-  }
-  if (location.protocol === 'https:' && url.protocol === 'http:') throw new Error('An HTTPS app cannot connect to an HTTP Stone. Use a trusted HTTPS address.')
-  return url.origin
-}
-
 function App() {
-  const [origin, setOrigin] = useState(location.origin)
+  const [origin, setOrigin] = useState('')
   const [pairing, setPairing] = useState<Pairing | null>(null)
   const [loaded, setLoaded] = useState(false)
   const [state, setState] = useState<WearerState | null>(null)
   const [code, setCode] = useState('')
   const [name, setName] = useState('G2 wearer')
   const [error, setError] = useState('')
-  const [busy, setBusy] = useState(false)
+  const [busy, setBusy] = useState<'check' | 'pair' | null>(null)
+  const [detailsOpen, setDetailsOpen] = useState(false)
+  const [checkStatus, setCheckStatus] = useState('')
+  const busyRef = useRef(false)
+  const storageAvailable = useRef(true)
   const runtime = useRef<WearerRuntime | null>(null)
   const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const armed = useRef(false)
@@ -33,31 +31,72 @@ function App() {
 
   useEffect(() => {
     const abort = new AbortController()
+    const timer = setTimeout(() => abort.abort(), 8000)
+    let cancelled = false
     void (async () => {
-      try {
-        const response = await fetch('./stone.json', { signal: abort.signal, cache: 'no-store' })
-        const config = response.ok ? await response.json() : null
-        const server = validateOrigin(config?.origin || localStorage.getItem('evencomms.origin') || location.origin)
-        const saved = localStorage.getItem(`evencomms.wearer:${server}`)
-        setOrigin(server)
-        if (saved) {
-          const value = JSON.parse(saved)
-          if (typeof value.token === 'string' && typeof value.session_id === 'string' && typeof value.draft?.text === 'string') setPairing(value)
+      let configured: unknown = packagedOrigin
+      let savedOrigin: string | null = null
+      let warning = ''
+      try { savedOrigin = localStorage.getItem('evencomms.origin') }
+      catch {
+        storageAvailable.current = false
+        warning = 'Browser storage is unavailable. Enter or check the Stone address to pair; pairing and drafts will be memory-only.'
+      }
+      // A packaged public origin must not depend on fetching local JSON in an opaque/file WebView.
+      if (packagedOrigin === undefined) {
+        try {
+          const response = await fetch('./stone.json', { signal: abort.signal, cache: 'no-store' })
+          const config = response.ok ? await response.json() : null
+          configured = config?.origin
+        } catch { /* Normal web builds can still use a saved target or their HTTP(S) page origin. */ }
+      }
+      clearTimeout(timer)
+      if (cancelled) return
+      let server = ''
+      for (const candidate of [configured, savedOrigin, location.origin]) {
+        try { server = validateOrigin(candidate, location.protocol); break }
+        catch { /* Invalid candidates are never used as server addresses. */ }
+      }
+      setOrigin(server)
+      if (!server) warning ||= 'No valid Stone address is available. Enter a full HTTP(S) Stone origin to pair.'
+      if (server && storageAvailable.current) {
+        let saved: string | null = null
+        try { saved = localStorage.getItem(`evencomms.wearer:${server}`) }
+        catch {
+          storageAvailable.current = false
+          warning = 'Browser storage is unavailable. The Stone address is ready, but pairing and drafts will be memory-only.'
         }
-      } catch (err) {
-        if (!abort.signal.aborted) setError(err instanceof Error ? err.message : 'Could not load saved pairing. Check browser storage access.')
-      } finally { if (!abort.signal.aborted) setLoaded(true) }
+        if (saved) {
+          try {
+            const value = JSON.parse(saved)
+            const credentials = pairingCredentials(value)
+            const draft = value?.draft
+            if (!credentials || typeof value.name !== 'string' || typeof draft?.text !== 'string' ||
+                !(draft.pending === null || typeof draft.pending?.text === 'string' && typeof draft.pending?.id === 'string')) throw new Error()
+            setPairing({ token: credentials.token, session_id: credentials.session_id, name: value.name,
+              draft: { text: draft.text, pending: draft.pending ? { text: draft.pending.text, id: draft.pending.id } : null } })
+          } catch { warning = 'Saved pairing could not be read. Check browser storage before pairing again; a saved draft may still be present.' }
+        }
+      }
+      setError(warning)
+      setLoaded(true)
     })()
-    return () => abort.abort()
+    return () => { cancelled = true; clearTimeout(timer); abort.abort() }
   }, [])
+
+  useEffect(() => { if (error || state?.error) setDetailsOpen(true) }, [error, state?.error])
 
   useEffect(() => {
     if (!pairing) return
     const connection = new WearerRuntime({ origin, token: pairing.token, simulated, saved: pairing.draft,
       changed: setState,
       persist: draft => {
+        if (!storageAvailable.current) return
         try { localStorage.setItem(`evencomms.wearer:${origin}`, JSON.stringify({ ...pairing, draft })) }
-        catch { setError('Browser storage is unavailable. Draft recovery after reload is not guaranteed. Keep this page open.') }
+        catch {
+          storageAvailable.current = false
+          setError('Browser storage is unavailable. Draft recovery after reload is not guaranteed. Keep this page open.')
+        }
       },
     })
     runtime.current = connection
@@ -96,33 +135,55 @@ function App() {
 
   useEffect(() => () => { if (holdTimer.current) clearTimeout(holdTimer.current) }, [])
 
-  async function pair(event: FormEvent) {
+  function pair(event: FormEvent) {
     event.preventDefault()
-    setBusy(true)
+    void connect(true)
+  }
+
+  async function connect(shouldPair: boolean) {
+    if (busyRef.current || !loaded || pairing) return
+    busyRef.current = true
+    setBusy(shouldPair ? 'pair' : 'check')
     setError('')
+    setCheckStatus(shouldPair ? 'Checking /health before sending the pairing request...' : 'Checking /health without credentials...')
+    if (!shouldPair) setDetailsOpen(true)
     try {
-      const server = validateOrigin(origin.trim())
-      const response = await fetch(server + '/api/pair', { method: 'POST', credentials: 'omit',
-        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, name }), signal: AbortSignal.timeout(15000) })
-      const result = await response.json()
-      if (!response.ok) throw new Error(result.detail || 'Pairing failed')
-      const next: Pairing = { ...result, name, draft: emptyDraft }
-      localStorage.setItem(`evencomms.wearer:${server}`, JSON.stringify(next))
-      localStorage.setItem('evencomms.origin', server)
-      setOrigin(server)
-      setPairing(next)
-      setCode('')
-    } catch (err) { setError(err instanceof Error ? err.message : 'Pairing failed. Check the Stone address and code.') }
-    finally { setBusy(false) }
+      if (shouldPair) {
+        const result = await pairWithPrecheck(origin, location.protocol, { code, name })
+        const next: Pairing = { token: result.token, session_id: result.session_id, name, draft: emptyDraft }
+        if (storageAvailable.current) {
+          try {
+            localStorage.setItem(`evencomms.wearer:${result.origin}`, JSON.stringify(next))
+            localStorage.setItem('evencomms.origin', result.origin)
+          } catch { storageAvailable.current = false }
+        }
+        if (!storageAvailable.current) setError('Paired for this page only: browser storage is unavailable. Do not pair again now. Keep this page open; pairing and draft recovery after reload are not guaranteed.')
+        setOrigin(result.origin)
+        setPairing(next)
+        setCode('')
+      } else setOrigin(await checkConnection(origin, location.protocol))
+      setCheckStatus('Connection check passed: /health returned JSON status "ok".')
+    } catch (err) {
+      setCheckStatus('')
+      setError(err instanceof ConnectionError ? err.message : 'Connection attempt failed. Check the Stone address and connection details before trying again.')
+    } finally { busyRef.current = false; setBusy(null) }
   }
 
   function clear() {
     if (!confirm('Clear this device pairing and draft? Pending audio is lost. The server conversation is not deleted.')) return
+    stopHold(true)
     runtime.current?.close()
-    try { localStorage.removeItem(`evencomms.wearer:${origin}`); localStorage.removeItem('evencomms.origin') }
-    catch { setError('Could not clear browser storage. Clear this site data in browser settings.'); return }
+    try {
+      localStorage.removeItem(`evencomms.wearer:${origin}`)
+      localStorage.removeItem('evencomms.origin')
+      setError('')
+    } catch {
+      storageAvailable.current = false
+      setError('Pairing cleared for this page only. Browser storage could not be cleared; saved pairing or drafts may return after reload. Clear this site data in browser settings.')
+    }
     setPairing(null)
     setState(null)
+    setCheckStatus('')
   }
 
   function startHold() {
@@ -148,18 +209,32 @@ function App() {
   }
 
   const disabled = !state?.connected || !!state.draft.error || state.holding
+  const details = connectionDetails(location, window.origin, origin)
 
   return <main className="wearer">
-    <header className="wearer-header"><a href="/">KUNAS<span> / EVENCOMMS</span></a><span className="wearer-tag">{simulated ? 'BROWSER SIMULATION' : 'G2 COMPANION'}</span></header>
-    <section className="wearer-intro"><p className="eyebrow">A DIRECT LINE TO YOUR STONE</p><h1>Speak. Correct.<br /><em>Stay connected.</em></h1>
-      <p>One tap removes one word. Hold continuously, then release to send.</p></section>
+    <header className="wearer-header"><strong className="wearer-brand">KUNAS<span> / EVENCOMMS</span></strong><span className="wearer-tag">{simulated ? 'BROWSER SIMULATION' : 'G2 COMPANION'}</span></header>
     {error && <div className="wearer-error" role="alert">{error}</div>}
+    <details className="wearer-card connection-details" open={detailsOpen} onToggle={event => setDetailsOpen(event.currentTarget.open)}>
+      <summary>Connection details</summary>
+      <dl>
+        <dt>Page URL origin (location.origin)</dt><dd><code>{details.pageOrigin}</code></dd>
+        <dt>Browser-effective origin (window.origin)</dt><dd><code>{details.browserOrigin}</code></dd>
+        <dt>Scheme (location.protocol)</dt><dd><code>{details.protocol}</code></dd>
+        <dt>Stone target</dt><dd><code>{details.stoneOrigin}</code></dd>
+        <dt>Pair endpoint</dt><dd><code>{details.pairEndpoint}</code></dd>
+      </dl>
+      {checkStatus && <p className="wearer-small" role="status">{checkStatus}</p>}
+      <p className="wearer-small">A readable /health response does not prove pairing POST or WebSocket access. An opaque origin is reported as null, not inferred from the page URL.</p>
+    </details>
     {!loaded ? <p>Loading local pairing...</p> : !pairing ? <form className="wearer-card pairing" onSubmit={pair}>
-      <h2>Pair your connection</h2><p>Ask the operator for a one-use pairing code. No glasses? Open <a href="/glasses.html?simulate=1">browser simulation</a>.</p>
-      <label>Stone address<input type="url" value={origin} onChange={event => setOrigin(event.target.value)} required autoComplete="url" /></label>
-      <label>Your name<input value={name} maxLength={80} onChange={event => setName(event.target.value)} required autoComplete="nickname" /></label>
-      <label>Pairing code<input value={code} onChange={event => setCode(event.target.value.toUpperCase())} maxLength={8} minLength={8} required autoComplete="off" autoCapitalize="characters" spellCheck={false} /></label>
-      <button className="wearer-primary" disabled={busy}>{busy ? 'Pairing...' : 'Connect to Stone'}</button>
+      <h2>Pair your connection</h2><p>Ask the operator for a one-use pairing code. No glasses? Open <a href="?simulate=1">browser simulation</a>.</p>
+      <label>Stone address<input type="url" value={origin} disabled={!!busy} onChange={event => { setOrigin(event.target.value); setCheckStatus('') }} required autoComplete="url" /></label>
+      <label>Your name<input value={name} disabled={!!busy} maxLength={80} onChange={event => setName(event.target.value)} required autoComplete="nickname" /></label>
+      <label>Pairing code<input value={code} disabled={!!busy} onChange={event => setCode(event.target.value.toUpperCase())} maxLength={8} minLength={8} required autoComplete="off" autoCapitalize="characters" spellCheck={false} /></label>
+      <div className="wearer-actions pairing-actions">
+        <button className="wearer-primary" disabled={!!busy}>{busy === 'pair' ? 'Checking / pairing...' : 'Connect to Stone'}</button>
+        <button type="button" disabled={!!busy} onClick={() => void connect(false)}>{busy === 'check' ? 'Checking...' : 'Check connection'}</button>
+      </div>
       <p className="wearer-small">Use trusted HTTPS for private conversations. HTTP is for isolated LAN development only.</p>
     </form> : state && <>
       <section className="wearer-card">

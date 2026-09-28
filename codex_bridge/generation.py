@@ -107,6 +107,8 @@ class Generation:
         self.done = asyncio.get_running_loop().create_future()
         self.texts = {}
         self.delta_length = 0
+        self.on_text = None
+        self.live_texts = {}
         self.events = 0
         self.raw_completed = 0
         self.replay = None
@@ -232,6 +234,12 @@ class Generation:
                 if not isinstance(text, str) or len(text) > 16000:
                     raise ProtocolError()
                 text.encode("utf-8")
+                if self.on_text and item.get("phase") in {None, "final_answer"}:
+                    identity = item.get("id")
+                    if not isinstance(identity, str) or len(identity) > 128 or (identity not in self.live_texts and len(self.live_texts) >= 20):
+                        raise ProtocolError()
+                    self.live_texts[identity] = text
+                    self.publish_text()
                 if method == "item/completed" and item.get("phase") in {None, "final_answer"}:
                     identity = item.get("id")
                     if not isinstance(identity, str) or len(identity) > 128 or len(self.texts) >= 20:
@@ -271,6 +279,10 @@ class Generation:
             delta.encode("utf-8")
             if self.delta_length > 16000:
                 raise ProtocolError()
+            identity = params.get("itemId")
+            if self.on_text and identity in self.live_texts:
+                self.live_texts[identity] += delta
+                self.publish_text()
         elif method == "turn/started":
             started = params.get("turn")
             if not isinstance(started, dict) or not self.thread_id or params.get("threadId") != self.thread_id:
@@ -323,6 +335,12 @@ class Generation:
             "item/reasoning/summaryTextDelta", "item/reasoning/textDelta", "item/reasoning/summaryPartAdded",
         }:
             raise ProtocolError()
+
+    def publish_text(self):
+        text = "\n".join(self.live_texts.values())
+        if len(text) > 16000:
+            raise ProtocolError()
+        self.on_text(text)
 
     async def run(self, runtime, data):
         budget = runtime.relay.arm(data.model)

@@ -35,9 +35,9 @@ export async function request<T>(
   path: string,
   token: string | null,
   signal: AbortSignal,
-  options: { method?: string; body?: unknown; credentials?: 'same-origin' } = {},
+  options: { method?: string; body?: unknown; credentials?: 'same-origin'; onText?: (text: string) => void } = {},
 ): Promise<T> {
-  const headers: Record<string, string> = { Accept: 'application/json' };
+  const headers: Record<string, string> = { Accept: options.onText ? 'application/x-ndjson' : 'application/json' };
   if (token) headers.Authorization = `Bearer ${token}`;
   if (options.body !== undefined) headers['Content-Type'] = 'application/json';
   const response = await fetch(path, {
@@ -64,6 +64,46 @@ export async function request<T>(
     throw new ApiError(detail, response.status);
   }
   if (response.status === 204) return undefined as T;
+  if (options.onText && response.headers.get('content-type')?.split(';')[0] === 'application/x-ndjson') {
+    if (!response.body) throw new ApiError('Response stream is unavailable.', 502);
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder('utf-8', { fatal: true });
+    let buffer = '';
+    let count = 0;
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        buffer += decoder.decode(value, { stream: !done });
+        let end: number;
+        while ((end = buffer.indexOf('\n')) !== -1) {
+          const line = buffer.slice(0, end);
+          buffer = buffer.slice(end + 1);
+          if (line.length > 200000) throw new Error('Oversized event');
+          if (!line) continue;
+          if (++count > 4098) throw new Error('Too many events');
+          const event = JSON.parse(line);
+          if (event?.type === 'text' && typeof event.text === 'string' && characterCount(event.text) <= 16000) {
+            options.onText(event.text);
+          } else if (event?.type === 'done' && event.response && typeof event.response.text === 'string'
+              && characterCount(event.response.text) <= 16000) {
+            return event.response as T;
+          } else if (event?.type === 'error' && typeof event.detail === 'string' && Number.isInteger(event.status)) {
+            throw new ApiError(event.detail, event.status);
+          } else {
+            throw new Error('Invalid event');
+          }
+        }
+        if (buffer.length > 200000) throw new Error('Oversized event');
+        if (done) throw new Error('Missing completion');
+      }
+    } catch (error) {
+      if (error instanceof ApiError || signal.aborted) throw error;
+      throw new ApiError('The response stream ended before a complete reply was received.', 502);
+    } finally {
+      await reader.cancel().catch(() => {});
+      reader.releaseLock();
+    }
+  }
   return response.json() as Promise<T>;
 }
 
