@@ -8,9 +8,9 @@ it**. Wearer assistance remains local and human-approved. The separate optional
 RESEARCH tab can send an operator's questions and selected still frames to OpenAI;
 it never automatically replies to the glasses.
 
-Version `0.4.3` adds opt-in support for the installed Even companion’s
-`http://127.0.0.1:<port>` origin in both CORS and wearer WebSockets. See
-[the 0.4.3 release notes](docs/release-0.4.3.md) for configuration and upgrade details.
+Version `0.4.4` fixes Codex Research replies when OpenAI omits the response
+Content-Type header. See [the 0.4.4 release notes](docs/release-0.4.4.md).
+The installed Even companion origin support introduced in 0.4.3 is retained.
 
 Version `0.4.2` is a reply-compatibility and diagnostics hotfix for the **experimental ChatGPT account
 connection through Codex** introduced in `0.4.0` for operator-only Research.
@@ -24,9 +24,9 @@ retained. See the [0.4.2 hotfix notes](docs/codex.md#042-hotfix) and
 establish the cause of a past failure on a user's host or verify a real account.
 Consult the [release page](https://github.com/9vibes/EVENCOMMS/releases) and
 [CI runs](https://github.com/9vibes/EVENCOMMS/actions) for actual artifacts and
-verification results. The `0.4.3` publication targets share the existing public package:
-`ghcr.io/9vibes/evencomms:0.4.3` for the app and
-`ghcr.io/9vibes/evencomms:0.4.3-codex` for the isolated bridge.
+verification results. The `0.4.4` publication targets share the existing public package:
+`ghcr.io/9vibes/evencomms:0.4.4` for the app and
+`ghcr.io/9vibes/evencomms:0.4.4-codex` for the isolated bridge.
 The installable Umbrel package is maintained
 in [KNS-Umbrel](https://github.com/9vibes/KNS-Umbrel/tree/master/kunas-evencomms).
 The files in `deploy/umbrel` remain local-development templates, not the store's

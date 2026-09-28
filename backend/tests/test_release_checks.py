@@ -35,10 +35,10 @@ def release_python(index):
 
 
 @pytest.mark.parametrize("requested,ref_type,ref_name,valid", [
-    ("", "branch", "main", True), ("0.4.3", "tag", "v0.4.3", True),
-    ("0.4.3", "tag", "v0.4.1", False), ("0.4.1", "branch", "main", False),
-    ("v0.4.3", "branch", "main", False), ("0.4.3+build", "branch", "main", False),
-    ("0.4.3-01", "branch", "main", False), ("0.4.3-" + "a" * 117, "branch", "main", False),
+    ("", "branch", "main", True), ("0.4.4", "tag", "v0.4.4", True),
+    ("0.4.4", "tag", "v0.4.1", False), ("0.4.1", "branch", "main", False),
+    ("v0.4.4", "branch", "main", False), ("0.4.4+build", "branch", "main", False),
+    ("0.4.4-01", "branch", "main", False), ("0.4.4-" + "a" * 117, "branch", "main", False),
 ])
 def test_release_version_gate(monkeypatch, tmp_path, requested, ref_type, ref_name, valid):
     monkeypatch.chdir(ROOT)
@@ -47,7 +47,7 @@ def test_release_version_gate(monkeypatch, tmp_path, requested, ref_type, ref_na
         monkeypatch.setenv(key, value)
     if valid:
         exec(release_python(0), {})
-        assert (tmp_path / "output").read_text() == "version=0.4.3\n"
+        assert (tmp_path / "output").read_text() == "version=0.4.4\n"
     else:
         with pytest.raises(SystemExit) as error:
             exec(release_python(0), {})
@@ -69,7 +69,7 @@ def test_release_rejects_mismatched_package_lock_root(monkeypatch, directory):
         return content
 
     monkeypatch.chdir(ROOT)
-    monkeypatch.setenv("REQUESTED_VERSION", "0.4.3")
+    monkeypatch.setenv("REQUESTED_VERSION", "0.4.4")
     monkeypatch.setenv("GITHUB_REF_TYPE", "branch")
     monkeypatch.setattr(Path, "read_text", read)
     with pytest.raises(SystemExit, match="package-lock root versions"):
@@ -103,13 +103,13 @@ def test_both_registry_tags_must_be_confirmed_absent(monkeypatch, capsys, respon
             {"errors": [{"code": code}]} if code else {}).encode()
         raise urllib.error.HTTPError(request.full_url, status, private, {}, io.BytesIO(body))
 
-    for key, value in {"GITHUB_ACTOR": "fixture", "GH_TOKEN": private, "VERSION": "0.4.3",
+    for key, value in {"GITHUB_ACTOR": "fixture", "GH_TOKEN": private, "VERSION": "0.4.4",
                        "IMAGE": "ghcr.io/9vibes/evencomms"}.items():
         monkeypatch.setenv(key, value)
     monkeypatch.setattr(urllib.request, "urlopen", urlopen)
     if valid:
         exec(release_python(1), {})
-        assert [url.rsplit("/", 1)[-1] for url in calls[1:]] == ["0.4.3", "0.4.3-codex"]
+        assert [url.rsplit("/", 1)[-1] for url in calls[1:]] == ["0.4.4", "0.4.4-codex"]
     else:
         with pytest.raises(SystemExit) as error:
             exec(release_python(1), {})
@@ -123,7 +123,7 @@ def test_publication_checks_both_ids_before_tagging(checks, monkeypatch, tmp_pat
     import container_smoke
     program = release_python(2)
     monkeypatch.chdir(tmp_path)
-    for key, value in {"IMAGE": "ghcr.io/9vibes/evencomms", "VERSION": "0.4.3",
+    for key, value in {"IMAGE": "ghcr.io/9vibes/evencomms", "VERSION": "0.4.4",
                        "GITHUB_REPOSITORY": "9Vibes/EVENCOMMS", "GITHUB_SHA": "c" * 40,
                        "RUNNER_TEMP": str(tmp_path), "GITHUB_STEP_SUMMARY": str(tmp_path / "summary")}.items():
         monkeypatch.setenv(key, value)
@@ -135,7 +135,7 @@ def test_publication_checks_both_ids_before_tagging(checks, monkeypatch, tmp_pat
 
     def image_info(reference, user, labels):
         calls.append(("check", reference))
-        assert labels["org.opencontainers.image.version"] == "0.4.3"
+        assert labels["org.opencontainers.image.version"] == "0.4.4"
         if user == "10002:10002":
             assert labels["org.opencontainers.image.codex-version"] == "0.157.1"
         return references[reference]
@@ -161,13 +161,13 @@ def test_publication_checks_both_ids_before_tagging(checks, monkeypatch, tmp_pat
     exec(program, {})
     assert [call[0] for call in calls[:4]] == ["check"] * 4
     assert [call for call in calls if call[0] == "tag"] == [
-        ("tag", APP_ID, "ghcr.io/9vibes/evencomms:0.4.3"),
-        ("tag", BRIDGE_ID, "ghcr.io/9vibes/evencomms:0.4.3-codex"),
+        ("tag", APP_ID, "ghcr.io/9vibes/evencomms:0.4.4"),
+        ("tag", BRIDGE_ID, "ghcr.io/9vibes/evencomms:0.4.4-codex"),
     ]
     assert (tmp_path / "image-reference.txt").read_text() == "ghcr.io/9vibes/evencomms@" + APP_ID + "\n"
     assert (tmp_path / "codex-image-reference.txt").read_text() == "ghcr.io/9vibes/evencomms@" + BRIDGE_ID + "\n"
     metadata = json.loads((tmp_path / "release-images.json").read_text())
-    assert metadata["version"] == "0.4.3" and metadata["platform"] == "linux/amd64"
+    assert metadata["version"] == "0.4.4" and metadata["platform"] == "linux/amd64"
     assert metadata["images"]["codex"]["image_id"] == BRIDGE_ID
 
 
@@ -361,7 +361,7 @@ def test_failed_smoke_cleans_up_only_owned_resources(checks, monkeypatch, tmp_pa
     monkeypatch.setattr(checks, "uuid4", lambda: SimpleNamespace(hex="d" * 32))
     monkeypatch.setattr(checks.tempfile, "TemporaryDirectory", lambda **kwargs: nullcontext(str(tmp_path)))
     monkeypatch.setattr(checks.sys, "argv", ["codex_container_smoke", "--image", APP_ID,
-        "--codex-image", BRIDGE_ID, "--version", "0.4.3", "--revision", "c" * 40,
+        "--codex-image", BRIDGE_ID, "--version", "0.4.4", "--revision", "c" * 40,
         "--source", "https://github.com/9Vibes/EVENCOMMS"])
     with pytest.raises(RuntimeError, match="network-none real Codex production probe") as error:
         checks.main()
