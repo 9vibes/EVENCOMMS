@@ -171,28 +171,29 @@ def test_publication_checks_both_ids_before_tagging(checks, monkeypatch, tmp_pat
     assert metadata["images"]["codex"]["image_id"] == BRIDGE_ID
 
 
-def test_release_upgrade_gates_keep_legacy_checks_and_pinned_040_041_042():
+def test_release_upgrade_gates_keep_legacy_checks_and_pinned_040_041_042_043():
     workflow = (ROOT / ".github/workflows/release.yml").read_text()
     pulls = re.findall(r"docker pull (ghcr.io/9vibes/evencomms:[^\s]+)", workflow)
     upgrades = re.findall(r"--upgrade-from (ghcr.io/9vibes/evencomms:[^\s]+)", workflow)
     assert pulls == upgrades
-    assert [ref.split(":")[1].split("@")[0] for ref in upgrades] == ["0.1.0", "0.2.1", "0.3.0", "0.4.0", "0.4.1", "0.4.2"]
-    assert upgrades[-3] == (
+    assert [ref.split(":")[1].split("@")[0] for ref in upgrades] == ["0.1.0", "0.2.1", "0.3.0", "0.4.0", "0.4.1", "0.4.2", "0.4.3"]
+    assert upgrades[-4] == (
         "ghcr.io/9vibes/evencomms:0.4.0@sha256:"
         "0b22e2b2d2967e55f244985ebc16cdac3426c852527f83398dce7b639b5e6d15"
     )
-    assert upgrades[-2] == (
+    assert upgrades[-3] == (
         "ghcr.io/9vibes/evencomms:0.4.1@sha256:"
         "bb72aa606eaa2dd217dfd80076c121449b5d05bb897996aa540d4cd346f941ab"
     )
-    assert upgrades[-1] == "ghcr.io/9vibes/evencomms:0.4.2@sha256:929b7d98c0626325878aee764ebd5767d76b5d3b4656b1e8b475f362cd1e74e2"
+    assert upgrades[-2] == "ghcr.io/9vibes/evencomms:0.4.2@sha256:929b7d98c0626325878aee764ebd5767d76b5d3b4656b1e8b475f362cd1e74e2"
+    assert upgrades[-1] == "ghcr.io/9vibes/evencomms:0.4.3@sha256:527b4dac6b4354727e80304aaf74656b4b8bdd9cc9b4da84f25f50b67d2156db"
     steps = workflow.split("      - name: ")
     upgrade_steps = [step for step in steps if "--upgrade-from " in step]
     for step in upgrade_steps:
         assert '--image "$(cat "$RUNNER_TEMP/release-image-id")"' in step
         assert '--speech-pcm "$RUNNER_TEMP/speech.pcm"' in step
-        assert ("--upgrade-private-auth" in step) == any(ref in step for ref in upgrades[-3:])
-    assert workflow.index("Verify 0.4.2 upgrade") < workflow.index("Preflight BOTH immutable tags")
+        assert ("--upgrade-private-auth" in step) == any(ref in step for ref in upgrades[-4:])
+    assert workflow.index("Verify 0.4.3 upgrade") < workflow.index("Preflight BOTH immutable tags")
 
 
 @pytest.mark.parametrize("prior_auth", [False, True])
