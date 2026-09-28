@@ -3,11 +3,11 @@ id: kunas-evencomms
 name: EVENCOMMS
 tagline: Local conversations between Even glasses and an operator
 category: social
-version: "0.4.2"
+version: "0.4.3"
 port: 28097
 description: >-
-  SOURCE STAGING PACKAGE. The 0.4.2 reply-compatibility and diagnostics hotfix uses local source builds of
-  evencomms:0.4.2 and evencomms-codex:0.4.2; use KNS-Umbrel for the
+  SOURCE STAGING PACKAGE. The 0.4.3 installed-companion connectivity update uses local source builds of
+  evencomms:0.4.3 and evencomms-codex:0.4.3; use KNS-Umbrel for the
   digest-pinned installable release package and check actual release results.
   Pair an Even Hub client with a
   browser operator, transcribe short English utterances locally on CPU,
@@ -45,6 +45,10 @@ dependencies: []
 defaultUsername: ""
 deterministicPassword: true
 releaseNotes: >-
+  0.4.3 adds opt-in ALLOW_EVEN_LOCALHOST support for the installed Even app
+  HTTP loopback origin, covering CORS and wearer WebSockets across port changes.
+  Pairing and bearer authentication remain required.
+
   0.4.2 fixes reply compatibility and adds safe diagnostics for experimental Codex
   Research introduced in 0.4.0. Preserves native Responses Lite, reasoning summary
   none and the truthful Codex 0.157.1 upstream version header; the prior sanitized
@@ -73,7 +77,7 @@ releaseNotes: >-
   stays installed and idle, with account use opt-in. No new directories, networks,
   ports or resource-limit changes. API mode remains the UI default; existing
   optional OpenAI keys and settings remain unchanged. Rebuild/redeploy the full
-  stack, including both 0.4.2 images, without retagging 0.4.0 or 0.4.1. Initialization installs
+  stack, including both 0.4.3 images, without retagging 0.4.0 or 0.4.1. Initialization installs
   bundled nginx and MediaMTX configs and preserves the existing private token. Back up
   codex-auth alongside app data, never account tokens. Update in place, preserving
   app ID, web port 28097, RTMP port 21936, password, user data, model cache and stream secrets.

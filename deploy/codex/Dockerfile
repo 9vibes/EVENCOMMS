@@ -7,7 +7,7 @@ RUN npm ci --ignore-scripts --no-audit --no-fund \
 FROM python:3.12-slim-bookworm
 LABEL org.opencontainers.image.title="EVENCOMMS Experimental Codex Bridge" \
       org.opencontainers.image.description="Isolated experimental ChatGPT account connection; account use requires explicit operator actions" \
-      org.opencontainers.image.version="0.4.2" \
+      org.opencontainers.image.version="0.4.3" \
       org.opencontainers.image.codex-version="0.157.1"
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /opt/bridge
