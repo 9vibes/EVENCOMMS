@@ -11,12 +11,12 @@ from uuid import UUID
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, StrictStr, ValidationError, field_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from .config import Settings
+from .config import Settings, env_bool
+from .origins import EvenCORSMiddleware, is_even_localhost_origin
 from .codex_research import CodexResearch, register_codex_research_routes
 from .research import Research, register_research_routes
 from .services import Transcriber, suggest
@@ -210,7 +210,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     origins = settings.allowed_origins if settings else tuple(
         value.strip().rstrip("/") for value in os.getenv("ALLOWED_ORIGINS", "").split(",")
         if value.strip())
-    app.add_middleware(CORSMiddleware, allow_origins=list(origins), allow_credentials=False,
+    allow_even_localhost = (settings.allow_even_localhost if settings else
+                            env_bool("ALLOW_EVEN_LOCALHOST", "false"))
+    app.add_middleware(EvenCORSMiddleware, allow_even_localhost=allow_even_localhost,
+                       allow_origins=list(origins), allow_credentials=False,
                        allow_methods=["GET", "POST", "DELETE"], allow_headers=["Authorization", "Content-Type"])
 
     @app.middleware("http")
@@ -342,7 +345,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         config = app.state.settings
         origin = websocket.headers.get("origin")
         same_origin = ("https" if websocket.url.scheme == "wss" else "http") + "://" + websocket.headers.get("host", "")
-        if origin not in {same_origin, *config.allowed_origins} or websocket.query_params:
+        allowed = (origin in {same_origin, *config.allowed_origins}
+                   or (config.allow_even_localhost and is_even_localhost_origin(origin)))
+        if not allowed or websocket.query_params:
             await websocket.close(code=4403)
             return
         await websocket.accept()

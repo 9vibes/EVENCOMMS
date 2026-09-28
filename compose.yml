@@ -17,6 +17,7 @@ services:
     environment:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set a nonempty ADMIN_PASSWORD in .env}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
+      ALLOW_EVEN_LOCALHOST: ${ALLOW_EVEN_LOCALHOST:-false}
       DATABASE_PATH: /data/evencomms.sqlite3
       MODEL_CACHE: /data/models
       STT_ENABLED: ${STT_ENABLED:-true}

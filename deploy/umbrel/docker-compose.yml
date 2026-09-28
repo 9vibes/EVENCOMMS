@@ -44,6 +44,7 @@ services:
     environment:
       ADMIN_PASSWORD: ${APP_PASSWORD:?Umbrel must provide a nonempty APP_PASSWORD}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://${DEVICE_DOMAIN_NAME:-umbrel.local}:28097}
+      ALLOW_EVEN_LOCALHOST: ${ALLOW_EVEN_LOCALHOST:-false}
       DATABASE_PATH: /data/evencomms.sqlite3
       MODEL_CACHE: /data/models
       STT_ENABLED: ${STT_ENABLED:-true}

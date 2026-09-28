@@ -133,6 +133,25 @@ full browser origin in `ALLOWED_ORIGINS`. Include the packaged Even app's origin
 when it differs. Do not use wildcards. Manual replies work without Ollama; set a
 reachable `OLLAMA_URL` and installed `OLLAMA_MODEL` to enable AI suggestions.
 
+For an installed Even app whose diagnostics show `http://127.0.0.1:<port>`,
+you can set `ALLOW_EVEN_LOCALHOST=true` on the backend to permit that exact
+HTTP host with any valid explicit port for both CORS and wearer WebSockets.
+This is opt-in and defaults to false. It accommodates a changed port without
+allowing arbitrary websites, `null`, other loopback hosts, or wildcard origins.
+It trusts any browser app served at that local address, not just Even; pairing
+codes and bearer-token authentication are still required. Keep public and
+operator origins in `ALLOWED_ORIGINS`. The Even package must separately whitelist
+the destination server under its network permission.
+
+On an existing release, adding the exact observed origin to `ALLOWED_ORIGINS`
+works without new code. The new switch requires deploying an image built from
+this change and recreating the backend with the setting enabled. For Umbrel,
+the published image and store package are maintained separately in KNS-Umbrel;
+editing this repository does not update an installed Stone. After deployment,
+check `/health`, pairing, and wearer WebSocket access from the installed app,
+then repeat after restarting the Even app. Port changes and physical G2 behavior
+still require device verification. See [Even's networking guide](https://hub.evenrealities.com/docs/build/networking).
+
 Read the [store setup guide](https://github.com/9vibes/KNS-Umbrel/blob/master/kunas-evencomms/README.md)
 for persistent storage, settings, TLS and phone packaging. Adding the package to
 the store is not the same as installing it on a particular Stone.
