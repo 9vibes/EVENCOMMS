@@ -405,9 +405,7 @@ test('untrusted device instructions are not navigable and the established UI fit
     await page.screenshot({ path: testInfo.outputPath(`research-codex-${width}.png`), fullPage: true });
   }
   expect(mock.chats).toEqual([]);
-  await expect(page.getByText(/not free or unlimited/)).toBeVisible();
-  await expect(page.getByText(/isolated bridge RAM/)).toBeVisible();
-  await expect(page.getByText(/At most 8 Research requests per login/)).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Before you send', exact: true })).toHaveCount(0);
 });
 
 test('real operator logout revokes its token and stops a held pending poll without exposing a late code', async ({ page, codexMock: mock }) => {
