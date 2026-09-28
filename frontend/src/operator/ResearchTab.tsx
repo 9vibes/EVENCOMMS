@@ -308,7 +308,6 @@ export default function ResearchTab({ token, onUnauthorized, active }: {
             <button type="button" className="op-button" disabled={busy || codexBusy || !codexStatus?.enabled || codexStatus.state === 'pending' || codexStatus.state === 'connected'} onClick={() => changeCodexConnection('login')}>Get Codex login code</button>
             {codexStatus?.enabled !== false && <button type="button" className="op-button" disabled={codexBusy && codexStatus?.state === 'disconnected'} onClick={() => changeCodexConnection('disconnect')}>{codexStatus?.state === 'pending' ? 'Cancel sign-in' : 'Disconnect ChatGPT'}</button>}
           </div>
-          <p className="op-fine-print">Uses the same device-code flow as <code>codex login --device-auth</code>. Request a code here, then enter it on OpenAI's HTTPS page. A code from another CLI session will not connect this app.</p>
           {!trustedConsole && <p className="op-fine-print">This console uses unencrypted HTTP. Code login is available after a trusted-network confirmation, but your operator session and code can be intercepted. Prefer HTTPS; never use this on a public network.</p>}
           {codexStatus?.state === 'pending' && <>
             {deviceInstructions ? <div className="op-pair-code">
