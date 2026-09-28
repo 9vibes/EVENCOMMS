@@ -385,7 +385,12 @@ class Relay:
                         raise Rejected(502)
                     if response.headers.get("content-encoding", "identity") != "identity":
                         raise Rejected(502, "response_encoding")
-                    if response.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "text/event-stream":
+                    # Live Codex responses can omit Content-Type. Like the pinned
+                    # native client, let its SSE parser validate that stream; a
+                    # reply still requires the complete, validated turn below.
+                    # An explicitly incompatible media type remains an error.
+                    content_type = response.headers.get("content-type")
+                    if content_type is not None and content_type.split(";", 1)[0].strip().lower() != "text/event-stream":
                         raise Rejected(502)
                     outgoing = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\nConnection: close\r\n"
                     for name in RESPONSE_HEADERS:

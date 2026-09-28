@@ -78,6 +78,7 @@ def pinned_native_probe(tmp_path_factory):
 @pytest.mark.parametrize("model,case,code", [
     pytest.param("gpt-6-luna", "text", None, id="luna-text-metadata"),
     pytest.param("gpt-6-astra", "text", None, id="astra-text-metadata"),
+    pytest.param("gpt-6-luna", "missing_content_type", None, id="sse-without-content-type"),
     pytest.param("gpt-6-luna", "jpeg", None, id="jpeg-history-metadata"),
     pytest.param("gpt-6-luna", "quota", "rate_limit", id="http-429-quota"),
     pytest.param("gpt-6-astra", "model", "model_unavailable", id="http-404-model"),
@@ -266,7 +267,8 @@ def test_offline_pinned_native_chat(pinned_native_probe, tmp_path, caplog, model
                     else:
                         raise AssertionError("Unexpected offline fixture route")
                     body = (value if content_type == "text/event-stream" else json.dumps(value)).encode()
-                    writer.write((f"HTTP/1.1 {status} Fixture\r\nContent-Type: {content_type}\r\nConnection: close\r\n"
+                    media_header = "" if case == "missing_content_type" and path == "/responses" else f"Content-Type: {content_type}\r\n"
+                    writer.write((f"HTTP/1.1 {status} Fixture\r\n{media_header}Connection: close\r\n"
                                   f"Content-Length: {len(body)}\r\nSet-Cookie: private={PRIVATE}\r\n\r\n").encode() + body)
                     await writer.drain()
             except (ConnectionError, asyncio.IncompleteReadError):

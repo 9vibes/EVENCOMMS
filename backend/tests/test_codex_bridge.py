@@ -1538,7 +1538,8 @@ async def relay_request(relay, budget=None, *, payload=None, headers=None, targe
         await writer.wait_closed()
 
 
-def test_relay_has_no_budget_until_trusted_arm_and_never_uses_host_routing(monkeypatch):
+@pytest.mark.parametrize("content_type", ["text/event-stream", None])
+def test_relay_has_no_budget_until_trusted_arm_and_never_uses_host_routing(monkeypatch, content_type):
     async def run():
         calls, checks = [], []
 
@@ -1548,7 +1549,8 @@ def test_relay_has_no_budget_until_trusted_arm_and_never_uses_host_routing(monke
 
         def upstream(request):
             calls.append(request)
-            return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=RelayStream())
+            headers = {} if content_type is None else {"content-type": content_type}
+            return httpx.Response(200, headers=headers, stream=RelayStream())
 
         monkeypatch.setenv("HTTPS_PROXY", "http://unrelated.invalid")
         monkeypatch.setenv("OPENAI_API_KEY", "unrelated-key")
@@ -1749,7 +1751,7 @@ def test_relay_overlap_stale_paths_and_completion_cannot_rearm_old_work():
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("failure", ["network", "redirect", "compressed", "bad_content_type"])
+@pytest.mark.parametrize("failure", ["network", "redirect", "compressed", "bad_content_type", "empty_content_type"])
 def test_relay_uncertainty_redirect_and_invalid_upstream_consume_budget(failure, caplog):
     async def run():
         calls = []
@@ -1762,7 +1764,7 @@ def test_relay_uncertainty_redirect_and_invalid_upstream_consume_budget(failure,
                 return httpx.Response(307, headers={"location": "https://evil.invalid/private"})
             if failure == "compressed":
                 return httpx.Response(200, headers={"content-encoding": "gzip"}, stream=RelayStream((b"private",)))
-            return httpx.Response(200, headers={"content-type": "text/html"}, content=b"private")
+            return httpx.Response(200, headers={"content-type": "" if failure == "empty_content_type" else "text/html"}, content=b"private")
 
         relay = Relay(check_workspace=allow_fixture_workspace, transport=httpx.MockTransport(upstream))
         await relay.start()
@@ -1774,7 +1776,8 @@ def test_relay_uncertainty_redirect_and_invalid_upstream_consume_budget(failure,
             assert (await relay_request(relay, budget))[0] == 409
             assert budget.consumed and len(calls) == 1
             assert budget.failure == {"network": "network_error", "redirect": "unsupported_workspace",
-                                      "compressed": "response_encoding", "bad_content_type": "protocol_mismatch"}[failure]
+                                      "compressed": "response_encoding", "bad_content_type": "protocol_mismatch",
+                                      "empty_content_type": "protocol_mismatch"}[failure]
             assert "private provider diagnostic" not in caplog.text
         finally:
             await relay.close()

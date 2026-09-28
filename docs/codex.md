@@ -1,4 +1,8 @@
-# Experimental Codex Research (0.4.2)
+# Experimental Codex Research (0.4.4)
+
+Version `0.4.4` accepts an omitted upstream Content-Type header, matching the
+pinned native client's SSE parsing behavior. Explicitly incompatible media types
+remain rejected, and a complete validated turn is still required for success.
 
 EVENCOMMS `0.4.0` introduced **ChatGPT account (Experimental Codex)** alongside the
 existing **OpenAI API key** connection in Research. Version `0.4.2` fixes reply
