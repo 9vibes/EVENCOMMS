@@ -1,6 +1,6 @@
 {
   "name": "evencomms-codex-runtime",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "private": true,
   "dependencies": {
     "@openai/codex": "0.157.1"

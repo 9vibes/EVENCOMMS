@@ -3,7 +3,7 @@ id: kunas-evencomms
 name: EVENCOMMS
 tagline: Local conversations between Even glasses and an operator
 category: social
-version: "0.4.5"
+version: "0.4.6"
 port: 28097
 description: >-
   SOURCE STAGING PACKAGE. Use KNS-Umbrel for the verified, digest-pinned release.
@@ -21,10 +21,8 @@ dependencies: []
 defaultUsername: ""
 deterministicPassword: true
 releaseNotes: >-
-  0.4.5 adds live streaming Research replies and code-login-only controls.
-  Removes the unused wearer-client link and simplifies Research settings.
-  The last operator reply preview now matches the companion's green-on-black
-  glasses display. Interrupted replies preserve the question and attached frames;
-  only completed replies are saved in the local chat history.
-  Updates the server and Codex bridge together. Preserves app ID, ports, password,
-  database, model cache and private service token. Reconnect ChatGPT after updating.
+  0.4.6 removes redundant device-code explanation text from the Research tab.
+  Code login, model selection and streaming replies remain unchanged.
+  Update the server and bridge together in place. Existing data, settings,
+  app password and private service token are preserved. Reconnect ChatGPT
+  after updating. The private phone companion does not need reinstallation.

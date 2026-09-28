@@ -46,15 +46,15 @@ jobs:
           docker build --platform linux/amd64 \
             --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
-            --label "org.opencontainers.image.version=0.4.5" \
-            --tag evencomms:0.4.5 .
-          docker image inspect --format '{{.Id}}' evencomms:0.4.5 > "$RUNNER_TEMP/ci-app-image-id"
+            --label "org.opencontainers.image.version=0.4.6" \
+            --tag evencomms:0.4.6 .
+          docker image inspect --format '{{.Id}}' evencomms:0.4.6 > "$RUNNER_TEMP/ci-app-image-id"
           docker build --platform linux/amd64 -f deploy/codex/Dockerfile \
             --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
-            --label "org.opencontainers.image.version=0.4.5" \
-            --tag evencomms-codex:0.4.5 .
-          docker image inspect --format '{{.Id}}' evencomms-codex:0.4.5 > "$RUNNER_TEMP/ci-codex-image-id"
+            --label "org.opencontainers.image.version=0.4.6" \
+            --tag evencomms-codex:0.4.6 .
+          docker image inspect --format '{{.Id}}' evencomms-codex:0.4.6 > "$RUNNER_TEMP/ci-codex-image-id"
       - name: Verify exact candidate pair, offline binary and managed private auth (no account)
         # The helper owns unique Compose resources and removes them in finally,
         # including on signals; raw logs and private credentials are never dumped.
@@ -62,7 +62,7 @@ jobs:
           python scripts/codex_container_smoke.py \
             --image "$(cat "$RUNNER_TEMP/ci-app-image-id")" \
             --codex-image "$(cat "$RUNNER_TEMP/ci-codex-image-id")" \
-            --version 0.4.5 --revision "$GITHUB_SHA" \
+            --version 0.4.6 --revision "$GITHUB_SHA" \
             --source "https://github.com/$GITHUB_REPOSITORY"
 
   test:
@@ -118,7 +118,7 @@ jobs:
           ADMIN_PASSWORD: ci-only-not-a-deployment-password
         run: docker compose config --quiet
       - name: Build local image (no publication)
-        run: docker build -t evencomms:0.4.5 .
+        run: docker build -t evencomms:0.4.6 .
       - name: Install synthetic stream publisher
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - name: Container smoke test (no inference)
